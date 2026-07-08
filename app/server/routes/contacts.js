@@ -1,0 +1,66 @@
+const express = require("express");
+const store = require("../db");
+const router = express.Router();
+
+// GET /api/contacts?unit=1&type=odberatel
+router.get("/", (req, res) => {
+  const { unit, type } = req.query;
+  try {
+    let where = "accounting_unit_id = ?";
+    const params = [unit];
+    if (type) { where += " AND contact_type = ?"; params.push(type); }
+    res.json(store.all(`SELECT * FROM contact WHERE ${where} ORDER BY name`, params));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get("/:id", (req, res) => {
+  try {
+    const row = store.get("SELECT * FROM contact WHERE id = ?", [req.params.id]);
+    if (!row) return res.status(404).json({ error: "Kontakt nenalezen" });
+    res.json(row);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.post("/", (req, res) => {
+  const { accounting_unit_id, name, contact_type, ico, dic, is_vat_payer, address, bank_account, iban } = req.body;
+  try {
+    store.run(
+      `INSERT INTO contact (accounting_unit_id, name, contact_type, ico, dic, is_vat_payer, address, bank_account, iban)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [accounting_unit_id, name, contact_type, ico || null, dic || null, is_vat_payer ? 1 : 0, address || null, bank_account || null, iban || null]
+    );
+    const id = store.get("SELECT last_insert_rowid() AS id").id;
+    store.persist();
+    res.status(201).json(store.get("SELECT * FROM contact WHERE id = ?", [id]));
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+router.put("/:id", (req, res) => {
+  const { name, contact_type, ico, dic, is_vat_payer, address, bank_account } = req.body;
+  try {
+    const existing = store.get("SELECT * FROM contact WHERE id = ?", [req.params.id]);
+    if (!existing) return res.status(404).json({ error: "Kontakt nenalezen" });
+    store.run(
+      `UPDATE contact SET name=?, contact_type=?, ico=?, dic=?, is_vat_payer=?, address=?, bank_account=? WHERE id=?`,
+      [name ?? existing.name, contact_type ?? existing.contact_type, ico ?? existing.ico, dic ?? existing.dic,
+       is_vat_payer === undefined ? existing.is_vat_payer : (is_vat_payer ? 1 : 0),
+       address ?? existing.address, bank_account ?? existing.bank_account, req.params.id]
+    );
+    store.persist();
+    res.json(store.get("SELECT * FROM contact WHERE id = ?", [req.params.id]));
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Kontakty nejsou účetní záznam ve smyslu § 33a ZoÚ, takže mazání je povoleno
+// (jde o číselník) — pouze pokud na kontakt neexistují žádné doklady.
+router.delete("/:id", (req, res) => {
+  try {
+    const inUse = store.get("SELECT COUNT(*) AS cnt FROM document WHERE contact_id = ?", [req.params.id]);
+    if (inUse.cnt > 0) return res.status(400).json({ error: "Kontakt nelze smazat — je použit na dokladech." });
+    store.run("DELETE FROM contact WHERE id = ?", [req.params.id]);
+    store.persist();
+    res.status(204).end();
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+module.exports = router;

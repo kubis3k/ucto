@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:*; img-src 'self' data:;" />
+<title>Globaal Elevate — Účetní systém</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <script>
+    // Mimo Electron (preload.js) tento shim umožňuje ruční prohlížení UI
+    // proti API spuštěnému přes `npm run dev:server` (viz package.json).
+    if (!window.ucetnictvi) window.ucetnictvi = { apiBase: "http://127.0.0.1:4000/api" };
+  </script>
+  <div id="authScreen" class="auth-screen hidden"></div>
+  <div id="app" class="hidden">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">GE</div>
+        <div class="brand-text">
+          <div class="brand-name">Globaal Elevate</div>
+          <div class="brand-sub">Účetní systém</div>
+        </div>
+      </div>
+      <nav id="nav"></nav>
+      <div class="sidebar-footer">
+        <div id="vatBadge" class="vat-badge">DPH: —</div>
+        <div id="whoAmI" class="app-version"></div>
+        <div class="app-version">v1.0 · nezávislý systém</div>
+      </div>
+    </aside>
+    <main class="content">
+      <header class="topbar">
+        <h1 id="pageTitle">Dashboard</h1>
+        <div class="topbar-actions" id="topbarActions"></div>
+      </header>
+      <div id="view" class="view"></div>
+    </main>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+  <script src="app.js"></script>
+</body>
+</html>

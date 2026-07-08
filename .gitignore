@@ -1,0 +1,12 @@
+node_modules/
+app/dist/
+app/.devdata/
+*.sqlite
+*.sqlite-journal
+.env
+.env.local
+jwt-secret.txt
+
+# Local editor/agent tooling — not part of the application
+.claude/
+.agents/
