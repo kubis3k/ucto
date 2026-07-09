@@ -121,21 +121,10 @@
 html, body { height: 100%; margin: 0; }
 body {
   font-family: var(--font-ui);
-  background:
-    radial-gradient(50% 45% at 8% 0%, rgba(77, 124, 254, 0.10), transparent 62%),
-    radial-gradient(45% 40% at 100% 0%, rgba(124, 108, 255, 0.08), transparent 60%),
-    radial-gradient(50% 45% at 90% 100%, rgba(38, 158, 168, 0.07), transparent 62%),
-    var(--bg);
+  background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-}
-:root[data-theme="light"] body {
-  background:
-    radial-gradient(50% 45% at 8% 0%, rgba(77, 124, 254, 0.12), transparent 62%),
-    radial-gradient(45% 40% at 100% 0%, rgba(139, 122, 255, 0.10), transparent 60%),
-    radial-gradient(50% 45% at 90% 100%, rgba(45, 178, 188, 0.09), transparent 62%),
-    var(--bg);
 }
 
 /* Tabulární číslice všude, kde jde o čísla/peníze — brání poskakování sloupců */
@@ -151,78 +140,83 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: #39435a; }
 ::-webkit-scrollbar-track { background: transparent; }
 
-#app { display: flex; height: 100vh; overflow: hidden; }
+#app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
-/* ---------------------------------------------------------------- Sidebar */
-.sidebar {
-  width: 244px;
-  flex-shrink: 0;
-  background: rgba(127, 127, 127, 0.06);
-  backdrop-filter: blur(20px) saturate(1.2); -webkit-backdrop-filter: blur(20px) saturate(1.2);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  padding: 18px 12px 12px;
+/* ---------------------------------------------------------------- Top nav */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 24px; height: 58px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
 }
+.topbar-left { display: flex; align-items: center; gap: 26px; min-width: 0; }
+.topbar-right { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
 
-.brand { display: flex; align-items: center; gap: 11px; padding: 4px 8px 20px; }
+.brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .brand-mark {
-  width: 38px; height: 38px; border-radius: 10px;
-  background: linear-gradient(140deg, #5b8cff, #3f6ff0);
+  width: 32px; height: 32px; border-radius: 8px;
+  background: var(--brand);
   display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 14px; color: #fff;
-  box-shadow: 0 4px 14px rgba(77, 124, 254, 0.4);
+  font-weight: 700; font-size: 13px; color: #fff;
   letter-spacing: 0.5px;
 }
-.brand-name { font-weight: 650; font-size: 14px; letter-spacing: -0.01em; }
-.brand-sub { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
+.brand-text { display: flex; flex-direction: column; line-height: 1.2; }
+.brand-name { font-weight: 650; font-size: 13px; letter-spacing: -0.01em; }
+.brand-sub { font-size: 10px; color: var(--text-faint); }
 
-#nav { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding-right: 2px; }
-.nav-group-label {
-  font-size: 10px; text-transform: uppercase; letter-spacing: 0.09em;
-  color: var(--text-faint); padding: 16px 10px 6px; font-weight: 600;
+.topnav { display: flex; align-items: center; gap: 2px; }
+.nav-group { position: relative; }
+.nav-group-btn {
+  background: transparent; border: none; box-shadow: none; color: var(--text-dim);
+  font-size: 13px; font-weight: 500; padding: 8px 10px; border-radius: var(--radius-sm);
+  display: flex; align-items: center; gap: 5px; cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
 }
+.nav-group-btn:hover { background: var(--hover); color: var(--text); }
+.nav-group.active .nav-group-btn { color: var(--text); font-weight: 600; }
+.nav-caret { width: 13px; height: 13px; flex-shrink: 0; transition: transform 0.15s ease; }
+.nav-group.open .nav-caret { transform: rotate(180deg); }
+
+.nav-dropdown {
+  position: absolute; top: calc(100% + 6px); left: 0; min-width: 220px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); padding: 6px; z-index: 30;
+  display: none; flex-direction: column; gap: 1px;
+}
+.nav-group.open .nav-dropdown { display: flex; }
+
 .nav-item {
-  display: flex; align-items: center; gap: 11px;
+  display: flex; align-items: center; gap: 10px;
   padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer;
   color: var(--text-dim); font-size: 13px; font-weight: 500; user-select: none;
-  position: relative;
   transition: background 0.15s ease, color 0.15s ease;
 }
 .nav-item:hover { background: var(--hover); color: var(--text); }
-.nav-item.active { background: var(--brand-soft); color: #a9c2ff; font-weight: 600; }
-.nav-item.active::before {
-  content: ""; position: absolute; left: -12px; top: 50%; transform: translateY(-50%);
-  width: 3px; height: 20px; background: var(--brand); border-radius: 0 3px 3px 0;
-}
-.nav-icon { width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.nav-icon svg { width: 17px; height: 17px; stroke-width: 1.75; }
+.nav-item.active { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+.nav-icon { width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.nav-icon svg { width: 15px; height: 15px; stroke-width: 1.75; }
 
-.sidebar-footer { padding: 12px 8px 2px; border-top: 1px solid var(--border); margin-top: 8px; }
 .vat-badge {
-  font-size: 11.5px; padding: 7px 10px; border-radius: var(--radius-sm);
-  background: var(--surface-2); color: var(--text-dim); margin-bottom: 8px;
+  font-size: 11.5px; padding: 6px 10px; border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--text-dim);
   display: flex; align-items: center; gap: 7px;
 }
 .vat-badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); flex-shrink: 0; }
 .vat-badge.on { color: var(--amber); }
-.vat-badge.on::before { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
-.app-version { font-size: 10px; color: var(--text-faint); padding: 0 10px; }
-.sidebar-footer-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
-.sidebar-footer-row .theme-toggle { width: 30px; height: 30px; border-radius: 8px; }
-.sidebar-footer-row .theme-toggle svg { width: 15px; height: 15px; }
+.vat-badge.on::before { background: var(--amber); }
+.app-version { font-size: 11.5px; color: var(--text-faint); white-space: nowrap; }
+.topbar-right .theme-toggle { width: 32px; height: 32px; border-radius: 8px; }
+.topbar-right .theme-toggle svg { width: 15px; height: 15px; }
 
-/* ---------------------------------------------------------------- Content */
-.content { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
-.topbar {
+/* ---------------------------------------------------------------- Page header + content */
+.pagebar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 18px 30px; border-bottom: 1px solid var(--border);
-  background: var(--topbar-bg); backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2);
-  position: sticky; top: 0; z-index: 5;
+  padding: 18px 30px; border-bottom: 1px solid var(--border); flex-shrink: 0;
 }
-.topbar h1 { font-size: 19px; margin: 0; font-weight: 650; letter-spacing: -0.02em; }
+.pagebar h1 { font-size: 19px; margin: 0; font-weight: 650; letter-spacing: -0.02em; }
 .topbar-actions { display: flex; gap: 9px; }
 
+.content { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
 .view { padding: 24px 30px 64px; flex: 1; max-width: 1400px; width: 100%; }
 
 /* ---------------------------------------------------------------- Panels */
@@ -241,8 +235,7 @@ body {
 /* ---------------------------------------------------------------- KPI cards */
 .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 18px; }
 .kpi {
-  background: rgba(127, 127, 127, 0.07);
-  backdrop-filter: blur(16px) saturate(1.25); -webkit-backdrop-filter: blur(16px) saturate(1.25);
+  background: var(--surface);
   border: 1px solid var(--border); border-radius: var(--radius);
   padding: 18px 20px; position: relative; overflow: hidden;
   transition: border-color 0.15s ease;

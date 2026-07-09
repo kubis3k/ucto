@@ -512,13 +512,22 @@ const NAV = [
 
 function renderNav(active) {
   const nav = document.getElementById("nav");
-  nav.innerHTML = NAV.map((g) => `
-    <div class="nav-group-label">${g.group}</div>
-    ${g.items.map((it) => `
-      <div class="nav-item ${it.id === active ? "active" : ""}" data-nav="${it.id}">
-        <span class="nav-icon">${navIcon(it.id)}</span><span>${it.label}</span>
-      </div>`).join("")}
-  `).join("");
+  nav.innerHTML = NAV.map((g) => {
+    const groupActive = g.items.some((it) => it.id === active);
+    return `
+    <div class="nav-group ${groupActive ? "active" : ""}" data-nav-group="${esc(g.group)}">
+      <button type="button" class="nav-group-btn" data-action="toggle-nav-group">
+        ${esc(g.group)}
+        <svg class="nav-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="nav-dropdown">
+        ${g.items.map((it) => `
+          <div class="nav-item ${it.id === active ? "active" : ""}" data-nav="${it.id}">
+            <span class="nav-icon">${navIcon(it.id)}</span><span>${it.label}</span>
+          </div>`).join("")}
+      </div>
+    </div>`;
+  }).join("");
 }
 
 const VIEWS = {
@@ -2669,8 +2678,21 @@ function closeModal() {
 // EVENT DELEGATION
 // =====================================================================
 document.addEventListener("click", async (e) => {
+  const clickedGroup = e.target.closest(".nav-group");
+  if (e.target.closest("[data-action='toggle-nav-group']")) {
+    const wasOpen = clickedGroup.classList.contains("open");
+    document.querySelectorAll(".nav-group.open").forEach((g) => g.classList.remove("open"));
+    if (!wasOpen) clickedGroup.classList.add("open");
+    return;
+  }
+  if (!clickedGroup) document.querySelectorAll(".nav-group.open").forEach((g) => g.classList.remove("open"));
+
   const navItem = e.target.closest("[data-nav]");
-  if (navItem) { location.hash = "#" + navItem.dataset.nav; return; }
+  if (navItem) {
+    document.querySelectorAll(".nav-group.open").forEach((g) => g.classList.remove("open"));
+    location.hash = "#" + navItem.dataset.nav;
+    return;
+  }
 
   const action = e.target.closest("[data-action]")?.dataset.action;
   if (!action) return;
