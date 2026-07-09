@@ -15,6 +15,13 @@ async function createWindow() {
   const userDataDir = app.getPath("userData");
   httpServer = await start(userDataDir, PORT);
 
+  // Desktop startup catch-up pro pravidelné faktury — web má Vercel Cron,
+  // desktop appka žádný cron démona nemá, takže se doplní při každém startu.
+  // Neblokující (jen zaloguje chybu, nezastaví start okna).
+  require("./server/lib/recurring")
+    .generateDueRecurringInvoices(new Date().toISOString().slice(0, 10))
+    .catch((e) => console.error("recurring:", e));
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,

@@ -39,6 +39,9 @@ async function buildApp(userDataDir) {
   const authRoutes = require("./routes/auth");
   app.use("/api/auth", authRoutes);
 
+  // Cron endpoint (Vercel Cron) — vlastní CRON_SECRET autentizace, MUSÍ být
+  // mountovaný před requireAuth, protože cron nemá uživatelskou session.
+  app.use("/api/cron", require("./routes/cron"));
 
   app.use("/api", requireAuth);
   // Bezpečnostní zámek: routy níže dřív četly accounting_unit_id/unit
@@ -63,6 +66,9 @@ async function buildApp(userDataDir) {
   app.use("/api/export", require("./routes/export"));
   app.use("/api/ares", require("./routes/ares"));
   app.use("/api/templates", require("./routes/templates"));
+  app.use("/api/price-list", require("./routes/pricelist"));
+  app.use("/api/offers", require("./routes/offers"));
+  app.use("/api/recurring", require("./routes/recurring"));
   app.use("/api", require("./routes/misc")); // /api/accounts, /api/periods, /api/units, /api/users
 
   app.get("/health", (req, res) => res.json({ status: "ok" }));

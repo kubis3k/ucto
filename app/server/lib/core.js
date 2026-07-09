@@ -14,6 +14,7 @@ const DOC_PREFIX = {
   pokladni_vydej: "PV",
   bankovni_pohyb: "BV",
   interni_doklad: "ID",
+  nabidka: "NAB",
 };
 
 // Nepřerušená číselná řada dokladů (§ 11 ZoÚ): {TYP}-{ROK}-{POŘADÍ}

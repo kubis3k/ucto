@@ -349,6 +349,94 @@ CREATE TABLE IF NOT EXISTS posting_template_line (
 );
 
 -- ---------------------------------------------------------------------
+-- FÁZE 2 fakturace — Ceník, Nabídky, Pravidelné faktury (šablony).
+-- `offer`/`offer_line` jsou SCHVÁLENĚ separátní od `document` (ne nový
+-- doc_type) — nejsou to účetní záznamy (§ 33a ZoÚ), NESMÍ tečou do
+-- výkazů/DPH a nesvazují se triggery period-lock/no-delete/edit-guard
+-- (viz .claude/agent-memory/architect/accounting-doc-invariants.md).
+-- Číselná řada nabídek (NAB) ale sdílí document_number_sequence.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS price_list_item (
+    id                  SERIAL PRIMARY KEY,
+    accounting_unit_id  INTEGER NOT NULL REFERENCES accounting_unit(id),
+    name                TEXT NOT NULL,
+    description         TEXT,
+    unit_price          DOUBLE PRECISION NOT NULL,
+    unit                TEXT,
+    vat_rate            DOUBLE PRECISION,
+    active              INTEGER NOT NULL DEFAULT 1,
+    created_at          TEXT NOT NULL DEFAULT (now()::text)
+);
+
+CREATE TABLE IF NOT EXISTS offer (
+    id                  SERIAL PRIMARY KEY,
+    accounting_unit_id  INTEGER NOT NULL REFERENCES accounting_unit(id),
+    offer_number        TEXT NOT NULL,
+    contact_id          INTEGER REFERENCES contact(id),
+    project_id          INTEGER REFERENCES project(id),
+    issue_date          TEXT NOT NULL,
+    valid_until         TEXT,
+    description         TEXT,
+    total_amount        DOUBLE PRECISION NOT NULL DEFAULT 0,
+    currency            TEXT NOT NULL DEFAULT 'CZK',
+    is_vat_document     INTEGER NOT NULL DEFAULT 0,
+    vat_base_amount     DOUBLE PRECISION,
+    vat_rate            DOUBLE PRECISION,
+    vat_amount          DOUBLE PRECISION,
+    status              TEXT NOT NULL DEFAULT 'koncept'
+                            CHECK (status IN ('koncept','odeslana','prijata','odmitnuta','prevedena')),
+    converted_document_id INTEGER REFERENCES document(id),
+    responsible_user_id INTEGER NOT NULL REFERENCES app_user(id),
+    created_at          TEXT NOT NULL DEFAULT (now()::text),
+    updated_at          TEXT NOT NULL DEFAULT (now()::text),
+    UNIQUE (accounting_unit_id, offer_number)
+);
+
+CREATE TABLE IF NOT EXISTS offer_line (
+    id                  SERIAL PRIMARY KEY,
+    offer_id            INTEGER NOT NULL REFERENCES offer(id),
+    line_no             INTEGER NOT NULL,
+    description         TEXT NOT NULL,
+    quantity            DOUBLE PRECISION NOT NULL DEFAULT 1,
+    unit_price          DOUBLE PRECISION NOT NULL,
+    vat_rate            DOUBLE PRECISION,
+    line_amount         DOUBLE PRECISION NOT NULL,
+    UNIQUE (offer_id, line_no)
+);
+
+CREATE TABLE IF NOT EXISTS recurring_invoice (
+    id                  SERIAL PRIMARY KEY,
+    accounting_unit_id  INTEGER NOT NULL REFERENCES accounting_unit(id),
+    name                TEXT NOT NULL,
+    contact_id          INTEGER REFERENCES contact(id),
+    project_id          INTEGER REFERENCES project(id),
+    interval            TEXT NOT NULL CHECK (interval IN ('mesicne','ctvrtletne','rocne')),
+    next_run_date       TEXT NOT NULL,
+    start_date          TEXT,
+    end_date            TEXT,
+    max_occurrences     INTEGER,
+    occurrences_done    INTEGER NOT NULL DEFAULT 0,
+    description         TEXT,
+    is_vat_document     INTEGER NOT NULL DEFAULT 0,
+    vat_rate            DOUBLE PRECISION,
+    currency            TEXT NOT NULL DEFAULT 'CZK',
+    active              INTEGER NOT NULL DEFAULT 1,
+    last_generated_at   TEXT,
+    created_at          TEXT NOT NULL DEFAULT (now()::text)
+);
+
+CREATE TABLE IF NOT EXISTS recurring_invoice_line (
+    id                      SERIAL PRIMARY KEY,
+    recurring_invoice_id    INTEGER NOT NULL REFERENCES recurring_invoice(id),
+    line_no                 INTEGER NOT NULL,
+    description             TEXT NOT NULL,
+    quantity                DOUBLE PRECISION NOT NULL DEFAULT 1,
+    unit_price              DOUBLE PRECISION NOT NULL,
+    vat_rate                DOUBLE PRECISION,
+    UNIQUE (recurring_invoice_id, line_no)
+);
+
+-- ---------------------------------------------------------------------
 -- Indexy
 -- ---------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_posting_line_account ON posting_line(account_id);

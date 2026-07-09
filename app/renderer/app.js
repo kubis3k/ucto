@@ -459,6 +459,9 @@ const ICONS = {
   auditlog: '<path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
   help: '<circle cx="12" cy="12" r="9"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+  nabidky: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13l2 2 4-4"/>',
+  pricelist: '<path d="M4 6h16"/><path d="M4 12h10"/><path d="M4 18h7"/><circle cx="19" cy="17" r="2"/>',
+  recurring: '<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/>',
 };
 function navIcon(id) {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">${ICONS[id] || ""}</svg>`;
@@ -474,6 +477,11 @@ const NAV = [
     { id: "ledger", label: "Hlavní kniha", icon: "▥", title: "Hlavní kniha" },
     { id: "accounts", label: "Účtový rozvrh", icon: "#", title: "Účtový rozvrh" },
     { id: "templates", label: "Předkontace", icon: "⎘", title: "Předkontace (šablony zaúčtování)" },
+  ]},
+  { group: "Fakturace", items: [
+    { id: "nabidky", label: "Nabídky", icon: "◇", title: "Nabídky" },
+    { id: "pricelist", label: "Ceník", icon: "▤", title: "Ceník" },
+    { id: "recurring", label: "Pravidelné faktury", icon: "↻", title: "Pravidelné faktury" },
   ]},
   { group: "Evidence", items: [
     { id: "contacts", label: "Kontakty", icon: "◐", title: "Kontakty" },
@@ -511,6 +519,9 @@ const VIEWS = {
   ledger: renderLedger,
   accounts: renderAccounts,
   templates: renderTemplates,
+  nabidky: renderOffers,
+  pricelist: renderPriceList,
+  recurring: renderRecurring,
   contacts: renderContacts,
   projects: renderProjects,
   bank: renderBank,
@@ -547,6 +558,7 @@ async function bootstrap() {
   STATE.user = STATE.authUser;
   STATE.accounts = await api("GET", `/accounts?unit=${STATE.unit.id}`);
   STATE.periods = await api("GET", `/periods?unit=${STATE.unit.id}`);
+  STATE._priceList = await api("GET", `/price-list?unit=${STATE.unit.id}`);
   updateVatBadge();
   const whoAmI = document.getElementById("whoAmI");
   if (whoAmI) whoAmI.innerHTML = `${esc(STATE.user.full_name)} <a href="#" data-action="logout" style="color:var(--text-faint)">(odhlásit)</a>`;
@@ -1077,6 +1089,363 @@ async function handleCreateTemplate(form) {
   toast("Předkontace byla vytvořena.");
   closeModal();
   renderTemplates();
+}
+
+// =====================================================================
+// SDÍLENÝ EDITOR ŘÁDKŮ DOKLADU (nabídky, pravidelné faktury) — autofill
+// z ceníku (STATE._priceList), automatický dopočet line_amount = qty*price.
+// =====================================================================
+function priceListOptionsForLine() {
+  return `<option value="">— vybrat z ceníku —</option>${(STATE._priceList || []).map((p) =>
+    `<option value="${p.id}">${esc(p.name)}</option>`).join("")}`;
+}
+
+function lineRowHtml(l = {}) {
+  const amount = l.line_amount ?? ((l.quantity ?? 1) * (l.unit_price ?? 0));
+  return `
+    <div class="line-row" style="display:grid;grid-template-columns:1.4fr 1.6fr 0.8fr 0.9fr 0.7fr 0.9fr auto;gap:6px;margin-bottom:8px;align-items:center">
+      <select class="line-price-item">${priceListOptionsForLine()}</select>
+      <input type="text" class="line-description" placeholder="Popis" value="${esc(l.description || "")}" required />
+      <input type="number" step="0.01" min="0" class="line-quantity" placeholder="Množství" value="${l.quantity ?? 1}" />
+      <input type="number" step="0.01" min="0" class="line-unit-price" placeholder="Cena/j." value="${l.unit_price ?? ""}" />
+      <input type="number" step="0.01" class="line-vat-rate" placeholder="DPH %" value="${l.vat_rate ?? ""}" />
+      <input type="number" step="0.01" class="line-amount" placeholder="Celkem" value="${amount}" readonly />
+      <button type="button" class="small danger" data-action="remove-line" title="Smazat řádek">×</button>
+    </div>`;
+}
+
+function lineEditorHtml(lines = []) {
+  return `
+    <div id="linesEditor">${lines.map(lineRowHtml).join("")}</div>
+    <button type="button" class="secondary small" data-action="add-line" style="margin-top:8px">+ Přidat řádek</button>`;
+}
+
+function addLineRow(container) {
+  if (!container) return;
+  container.insertAdjacentHTML("beforeend", lineRowHtml());
+}
+
+function recomputeLineAmount(row) {
+  if (!row) return;
+  const qty = Number(row.querySelector(".line-quantity").value) || 0;
+  const price = Number(row.querySelector(".line-unit-price").value) || 0;
+  row.querySelector(".line-amount").value = (qty * price).toFixed(2);
+}
+
+// Vyplní popis/cenu/DPH z vybrané položky ceníku a dopočítá řádek.
+function applyPriceAutofill(select) {
+  const row = select.closest(".line-row");
+  const item = (STATE._priceList || []).find((p) => String(p.id) === select.value);
+  if (!row || !item) return;
+  row.querySelector(".line-description").value = item.description || item.name;
+  row.querySelector(".line-unit-price").value = item.unit_price ?? "";
+  row.querySelector(".line-vat-rate").value = item.vat_rate ?? "";
+  recomputeLineAmount(row);
+}
+
+function collectLines(container) {
+  if (!container) return [];
+  return [...container.querySelectorAll(".line-row")].map((row) => ({
+    description: row.querySelector(".line-description").value,
+    quantity: Number(row.querySelector(".line-quantity").value) || 1,
+    unit_price: Number(row.querySelector(".line-unit-price").value) || 0,
+    vat_rate: row.querySelector(".line-vat-rate").value !== "" ? Number(row.querySelector(".line-vat-rate").value) : null,
+    line_amount: Number(row.querySelector(".line-amount").value) || 0,
+  })).filter((l) => l.description);
+}
+
+// change/input na řádcích editoru nejsou "click", proto samostatná delegace
+// (mimo hlavní click dispatcher níže) — select autofill z ceníku a
+// automatický dopočet částky při změně množství/ceny.
+document.addEventListener("change", (e) => {
+  if (e.target.matches(".line-price-item")) applyPriceAutofill(e.target);
+});
+document.addEventListener("input", (e) => {
+  if (e.target.matches(".line-quantity, .line-unit-price")) recomputeLineAmount(e.target.closest(".line-row"));
+});
+
+// =====================================================================
+// CENÍK (price_list_item) — číselník pro autofill řádků nabídek/faktur.
+// =====================================================================
+async function renderPriceList() {
+  const unit = STATE.unit.id;
+  const items = await api("GET", `/price-list?unit=${unit}`);
+  STATE._priceList = items;
+  document.getElementById("topbarActions").innerHTML = `<button data-action="new-price-item">+ Nová položka</button>`;
+  document.getElementById("view").innerHTML = `
+    <div class="panel">
+      <div class="table-wrap"><table>
+        <thead><tr><th>Název</th><th>Popis</th><th class="num">Cena/j.</th><th>Jednotka</th><th class="num">DPH %</th><th></th></tr></thead>
+        <tbody>${items.length ? items.map((p) => `
+          <tr><td>${esc(p.name)}</td><td>${esc(p.description || "—")}</td><td class="num">${fmtMoney(p.unit_price)}</td>
+            <td>${esc(p.unit || "—")}</td><td class="num">${p.vat_rate ?? "—"}</td>
+            <td><button class="small" data-action="edit-price-item" data-id="${p.id}">Upravit</button>
+              <button class="small danger" data-action="delete-price-item" data-id="${p.id}">Smazat</button></td></tr>`).join("")
+          : `<tr><td colspan="6" class="empty-state">Zatím žádné položky ceníku.</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+function priceListFormModal(item = null) {
+  showModal(`
+    <h2>${item ? "Upravit položku ceníku" : "Nová položka ceníku"}</h2>
+    <form data-form="save-price-item" data-id="${item?.id || ""}">
+      <label>Název</label><input type="text" name="name" value="${esc(item?.name || "")}" required />
+      <label>Popis</label><input type="text" name="description" value="${esc(item?.description || "")}" />
+      <div class="form-grid">
+        <div><label>Cena za jednotku (Kč)</label><input type="number" step="0.01" name="unit_price" value="${item?.unit_price ?? ""}" required /></div>
+        <div><label>Jednotka</label><input type="text" name="unit" value="${esc(item?.unit || "")}" placeholder="ks, hod…" /></div>
+        <div><label>Sazba DPH (%)</label><input type="number" step="0.01" name="vat_rate" value="${item?.vat_rate ?? 21}" /></div>
+      </div>
+      <div class="form-actions">
+        <button type="submit">${item ? "Uložit" : "Vytvořit"}</button>
+        <button type="button" class="secondary" data-action="close-modal">Zrušit</button>
+      </div>
+    </form>
+  `);
+}
+
+async function handleSavePriceItem(form) {
+  const fd = new FormData(form);
+  const body = Object.fromEntries(fd.entries());
+  body.accounting_unit_id = STATE.unit.id;
+  body.unit_price = Number(body.unit_price);
+  if (body.vat_rate !== "") body.vat_rate = Number(body.vat_rate); else delete body.vat_rate;
+  const id = form.dataset.id;
+  if (id) await api("PUT", `/price-list/${id}`, body);
+  else await api("POST", "/price-list", body);
+  toast(id ? "Položka ceníku byla upravena." : "Položka ceníku byla vytvořena.");
+  closeModal();
+  renderPriceList();
+}
+
+// =====================================================================
+// NABÍDKY (offer/offer_line) — samostatná od `document`, viz INVARIANTY.
+// =====================================================================
+const OFFER_STATUS_LABEL = { koncept: "Koncept", odeslana: "Odeslaná", prijata: "Přijatá", odmitnuta: "Odmítnutá", prevedena: "Převedena na fakturu" };
+
+async function ensureContactsAndProjectsLoaded() {
+  if (!STATE._contacts) STATE._contacts = await api("GET", `/contacts?unit=${STATE.unit.id}`);
+  if (!STATE._projects) STATE._projects = await api("GET", `/projects?unit=${STATE.unit.id}`);
+}
+
+async function renderOffers() {
+  const unit = STATE.unit.id;
+  const [offers] = await Promise.all([api("GET", `/offers?unit=${unit}`), ensureContactsAndProjectsLoaded()]);
+  document.getElementById("topbarActions").innerHTML = `<button data-action="new-offer">+ Nová nabídka</button>`;
+  document.getElementById("view").innerHTML = `
+    <div class="panel">
+      <div class="table-wrap"><table>
+        <thead><tr><th>Číslo</th><th>Kontakt</th><th>Vyhotoveno</th><th>Platnost do</th><th class="num">Celkem</th><th>Stav</th><th></th></tr></thead>
+        <tbody>${offers.length ? offers.map((o) => `
+          <tr>
+            <td class="mono">${esc(o.offer_number)}</td>
+            <td>${esc(STATE._contacts?.find((c) => c.id === o.contact_id)?.name || "—")}</td>
+            <td>${fmtDate(o.issue_date)}</td><td>${fmtDate(o.valid_until)}</td>
+            <td class="num">${fmtMoney(o.total_amount)}</td>
+            <td><span class="badge">${OFFER_STATUS_LABEL[o.status]}</span></td>
+            <td><button class="small" data-action="offer-detail" data-id="${o.id}">Detail</button>
+              ${o.status !== "prevedena" ? `<button class="small danger" data-action="delete-offer" data-id="${o.id}">Smazat</button>` : ""}</td>
+          </tr>`).join("") : `<tr><td colspan="7" class="empty-state">Zatím žádné nabídky.</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+function offerFormModal() {
+  showModal(`
+    <h2>Nová nabídka</h2>
+    <form data-form="create-offer">
+      <div class="form-grid">
+        <div><label>Kontakt</label><select name="contact_id"><option value="">—</option>${(STATE._contacts || []).map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></div>
+        <div><label>Projekt/zakázka</label><select name="project_id"><option value="">—</option>${(STATE._projects || []).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select></div>
+        <div><label>Datum vyhotovení</label><input type="date" name="issue_date" value="${todayISO()}" required /></div>
+        <div><label>Platnost do</label><input type="date" name="valid_until" /></div>
+      </div>
+      <label>Popis</label><textarea name="description" rows="2"></textarea>
+      <label style="margin-top:16px"><input type="checkbox" name="is_vat_document" style="width:auto;display:inline-block;margin-right:6px" /> Daňový doklad (DPH pole)</label>
+      <div class="form-grid">
+        <div><label>Základ daně</label><input type="number" step="0.01" name="vat_base_amount" /></div>
+        <div><label>Sazba DPH (%)</label><input type="number" step="0.01" name="vat_rate" value="21" /></div>
+        <div><label>Výše DPH</label><input type="number" step="0.01" name="vat_amount" /></div>
+      </div>
+      <label style="margin-top:14px">Řádky nabídky</label>
+      ${lineEditorHtml([{}])}
+      <div class="form-actions">
+        <button type="submit">Vytvořit</button>
+        <button type="button" class="secondary" data-action="close-modal">Zrušit</button>
+      </div>
+    </form>
+  `);
+}
+
+async function handleCreateOffer(form) {
+  const fd = new FormData(form);
+  const body = Object.fromEntries(fd.entries());
+  body.accounting_unit_id = STATE.unit.id;
+  body.responsible_user_id = STATE.user.id;
+  body.is_vat_document = fd.get("is_vat_document") === "on";
+  ["vat_base_amount", "vat_rate", "vat_amount"].forEach((k) => { if (body[k]) body[k] = Number(body[k]); });
+  body.lines = collectLines(document.getElementById("linesEditor"));
+  await api("POST", "/offers", body);
+  toast("Nabídka byla vytvořena.");
+  closeModal();
+  renderOffers();
+}
+
+async function showOfferDetail(id) {
+  const offer = await api("GET", `/offers/${id}`);
+  const contact = STATE._contacts?.find((c) => c.id === offer.contact_id);
+  const statusButtons = ["koncept", "odeslana", "prijata", "odmitnuta"].filter((s) => s !== offer.status).map((s) =>
+    `<button class="secondary small" data-action="offer-status" data-id="${offer.id}" data-status="${s}">${OFFER_STATUS_LABEL[s]}</button>`).join("");
+  showModal(`
+    <h2>Nabídka ${esc(offer.offer_number)}</h2>
+    <table>
+      <tr><td class="text-dim">Stav</td><td><span class="badge">${OFFER_STATUS_LABEL[offer.status]}</span></td></tr>
+      <tr><td class="text-dim">Kontakt</td><td>${esc(contact?.name || "—")}</td></tr>
+      <tr><td class="text-dim">Vyhotoveno</td><td>${fmtDate(offer.issue_date)}</td></tr>
+      <tr><td class="text-dim">Platnost do</td><td>${fmtDate(offer.valid_until)}</td></tr>
+      <tr><td class="text-dim">Popis</td><td>${esc(offer.description || "—")}</td></tr>
+      <tr><td class="text-dim">Celkem</td><td><strong>${fmtMoney(offer.total_amount)}</strong></td></tr>
+    </table>
+    <div class="table-wrap" style="margin-top:12px"><table>
+      <thead><tr><th>Popis</th><th class="num">Množství</th><th class="num">Cena/j.</th><th class="num">DPH %</th><th class="num">Celkem</th></tr></thead>
+      <tbody>${(offer.lines || []).map((l) => `<tr><td>${esc(l.description)}</td><td class="num">${l.quantity}</td><td class="num">${fmtMoney(l.unit_price)}</td><td class="num">${l.vat_rate ?? "—"}</td><td class="num">${fmtMoney(l.line_amount)}</td></tr>`).join("")}</tbody>
+    </table></div>
+    <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
+      ${offer.status !== "prevedena" ? statusButtons : ""}
+      ${offer.status !== "prevedena" ? `<button class="secondary small" data-action="convert-offer" data-id="${offer.id}">Převést na fakturu</button>` : `<span class="text-dim">Převedena na fakturu #${offer.converted_document_id}</span>`}
+      <button class="secondary small" data-action="download-offer-pdf" data-id="${offer.id}" data-offer-number="${esc(offer.offer_number)}">Stáhnout PDF</button>
+      <button class="secondary small" data-action="open-send-offer" data-id="${offer.id}">Odeslat e-mailem</button>
+    </div>
+    <div id="sendOfferBox"></div>
+    <div class="form-actions">
+      <button type="button" class="secondary" data-action="close-modal">Zavřít</button>
+    </div>
+  `);
+}
+
+// Stáhne PDF nabídky přes autentizovaný fetch→blob (plain <a href> = 401),
+// stejný vzor jako downloadInvoicePdf.
+async function downloadOfferPdf(id, offerNumber) {
+  try {
+    const headers = {};
+    const token = authToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${API}/offers/${id}/pdf`, { headers });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || res.statusText); }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `nabidka-${offerNumber}.pdf`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (err) { toast(err.message, "error"); }
+}
+
+function openSendOfferForm(id) {
+  const box = document.getElementById("sendOfferBox");
+  if (!box) return;
+  box.innerHTML = `
+    <form data-form="send-offer-email" data-id="${id}" style="margin-top:10px">
+      <label>E-mail adresáta (nepovinné — bez vyplnění se použije e-mail kontaktu)</label>
+      <input type="email" name="to" placeholder="odberatel@example.com" />
+      <div class="form-actions"><button type="submit" class="secondary small">Odeslat</button></div>
+    </form>`;
+}
+
+async function handleSendOfferEmail(form) {
+  const id = form.dataset.id;
+  const { to } = Object.fromEntries(new FormData(form).entries());
+  try {
+    const result = await api("POST", `/offers/${id}/send-email`, to ? { to } : {});
+    toast(`Nabídka odeslána na ${result.to}.`);
+    document.getElementById("sendOfferBox").innerHTML = "";
+  } catch (err) { toast(err.message, "error"); }
+}
+
+// =====================================================================
+// PRAVIDELNÉ FAKTURY (recurring_invoice/recurring_invoice_line)
+// =====================================================================
+const RECURRING_INTERVAL_LABEL = { mesicne: "Měsíčně", ctvrtletne: "Čtvrtletně", rocne: "Ročně" };
+
+async function renderRecurring() {
+  const unit = STATE.unit.id;
+  const [templates] = await Promise.all([api("GET", `/recurring?unit=${unit}`), ensureContactsAndProjectsLoaded()]);
+  document.getElementById("topbarActions").innerHTML = `<button data-action="new-recurring">+ Nová šablona</button>`;
+  document.getElementById("view").innerHTML = `
+    <div class="panel">
+      <p class="text-dim" style="margin-top:0">Šablony pro automatické generování konceptů vydaných faktur (fakturuje se pravidelně, schvaluje se ručně — respektuje uzávěrku období).</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Název</th><th>Kontakt</th><th>Interval</th><th>Další generování</th><th>Aktivní</th><th></th></tr></thead>
+        <tbody>${templates.length ? templates.map((t) => `
+          <tr>
+            <td>${esc(t.name)}</td>
+            <td>${esc(STATE._contacts?.find((c) => c.id === t.contact_id)?.name || "—")}</td>
+            <td>${RECURRING_INTERVAL_LABEL[t.interval]}</td>
+            <td>${fmtDate(t.next_run_date)}</td>
+            <td>${t.active ? "ano" : "ne"}</td>
+            <td><button class="small" data-action="run-recurring" data-id="${t.id}">Generovat nyní</button>
+              <button class="small danger" data-action="delete-recurring" data-id="${t.id}">Smazat</button></td>
+          </tr>`).join("") : `<tr><td colspan="6" class="empty-state">Zatím žádné šablony.</td></tr>`}
+        </tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+function recurringFormModal() {
+  showModal(`
+    <h2>Nová šablona pravidelné faktury</h2>
+    <form data-form="create-recurring">
+      <label>Název</label><input type="text" name="name" required />
+      <div class="form-grid">
+        <div><label>Kontakt</label><select name="contact_id"><option value="">—</option>${(STATE._contacts || []).map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></div>
+        <div><label>Projekt/zakázka</label><select name="project_id"><option value="">—</option>${(STATE._projects || []).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select></div>
+        <div><label>Interval</label><select name="interval">${Object.entries(RECURRING_INTERVAL_LABEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></div>
+        <div><label>Datum dalšího generování</label><input type="date" name="next_run_date" value="${todayISO()}" required /></div>
+        <div><label>Konec (nepovinné)</label><input type="date" name="end_date" /></div>
+        <div><label>Max. počet výskytů (nepovinné)</label><input type="number" name="max_occurrences" /></div>
+      </div>
+      <label>Popis</label><textarea name="description" rows="2"></textarea>
+      <label style="margin-top:16px"><input type="checkbox" name="is_vat_document" style="width:auto;display:inline-block;margin-right:6px" /> Daňový doklad (DPH pole)</label>
+      <div class="form-grid">
+        <div><label>Sazba DPH (%)</label><input type="number" step="0.01" name="vat_rate" value="21" /></div>
+      </div>
+      <label style="margin-top:14px">Řádky faktury</label>
+      ${lineEditorHtml([{}])}
+      <div class="form-actions">
+        <button type="submit">Vytvořit</button>
+        <button type="button" class="secondary" data-action="close-modal">Zrušit</button>
+      </div>
+    </form>
+  `);
+}
+
+async function handleCreateRecurring(form) {
+  const fd = new FormData(form);
+  const body = Object.fromEntries(fd.entries());
+  body.accounting_unit_id = STATE.unit.id;
+  body.is_vat_document = fd.get("is_vat_document") === "on";
+  if (body.vat_rate !== "") body.vat_rate = Number(body.vat_rate); else delete body.vat_rate;
+  if (body.max_occurrences !== "") body.max_occurrences = Number(body.max_occurrences); else delete body.max_occurrences;
+  body.lines = collectLines(document.getElementById("linesEditor"));
+  await api("POST", "/recurring", body);
+  toast("Šablona pravidelné faktury byla vytvořena.");
+  closeModal();
+  renderRecurring();
+}
+
+async function runRecurringNow(id) {
+  try {
+    const result = await api("POST", `/recurring/${id}/run-now`, {});
+    const skippedMsg = result.skipped.length ? ` (${result.skipped.length}× vynecháno — chybí/uzavřené účetní období)` : "";
+    toast(`Vygenerováno ${result.created.length} faktur(y)${skippedMsg}.`);
+    renderRecurring();
+  } catch (err) { toast(err.message, "error"); }
 }
 
 // =====================================================================
@@ -2329,6 +2698,40 @@ document.addEventListener("click", async (e) => {
       case "view-inventory": showInventoryDetail(id); break;
       case "save-inventory-lines": saveInventoryLines(id); break;
       case "close-period": handleClosePeriod(id); break;
+
+      case "add-line": addLineRow(document.getElementById("linesEditor")); break;
+      case "remove-line": e.target.closest(".line-row")?.remove(); break;
+
+      case "new-price-item": priceListFormModal(); break;
+      case "edit-price-item": priceListFormModal(STATE._priceList.find((p) => String(p.id) === id)); break;
+      case "delete-price-item": {
+        if (!confirm("Smazat položku ceníku?")) break;
+        await api("DELETE", `/price-list/${id}`); toast("Položka ceníku byla smazána."); renderPriceList(); break;
+      }
+
+      case "new-offer": offerFormModal(); break;
+      case "offer-detail": await showOfferDetail(id); break;
+      case "convert-offer": {
+        if (!confirm("Převést nabídku na fakturu (koncept)?")) break;
+        await api("POST", `/offers/${id}/convert`); toast("Nabídka byla převedena na fakturu."); closeModal(); renderOffers(); break;
+      }
+      case "download-offer-pdf": await downloadOfferPdf(id, e.target.closest("[data-offer-number]").dataset.offerNumber); break;
+      case "open-send-offer": openSendOfferForm(id); break;
+      case "offer-status": {
+        const status = e.target.closest("[data-status]").dataset.status;
+        await api("PATCH", `/offers/${id}/status`, { status }); toast("Stav nabídky byl změněn."); showOfferDetail(id); break;
+      }
+      case "delete-offer": {
+        if (!confirm("Smazat nabídku?")) break;
+        await api("DELETE", `/offers/${id}`); toast("Nabídka byla smazána."); renderOffers(); break;
+      }
+
+      case "new-recurring": recurringFormModal(); break;
+      case "run-recurring": await runRecurringNow(id); break;
+      case "delete-recurring": {
+        if (!confirm("Smazat šablonu pravidelné faktury?")) break;
+        await api("DELETE", `/recurring/${id}`); toast("Šablona byla smazána."); renderRecurring(); break;
+      }
     }
   } catch (err) {
     toast(err.message, "error");
@@ -2364,6 +2767,10 @@ document.addEventListener("submit", async (e) => {
       case "auth-bankid-callback": await handleAuthBankidCallback(e.target); break;
       case "accept-invite": await handleAcceptInvite(e.target); break;
       case "invite-colleague": await handleInviteColleague(e.target); break;
+      case "save-price-item": await handleSavePriceItem(e.target); break;
+      case "create-offer": await handleCreateOffer(e.target); break;
+      case "send-offer-email": await handleSendOfferEmail(e.target); break;
+      case "create-recurring": await handleCreateRecurring(e.target); break;
     }
   } catch (err) {
     toast(err.message, "error");
