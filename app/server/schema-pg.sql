@@ -471,6 +471,37 @@ CREATE TABLE IF NOT EXISTS recurring_invoice_line (
 );
 
 -- ---------------------------------------------------------------------
+-- Příloha k účetní závěrce (§ 18 ZoÚ, § 39 vyhl. 500/2002 Sb.) — viz
+-- schema.sql pro vysvětlení, 1:1 překlad.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS financial_statement_note (
+    id                              SERIAL PRIMARY KEY,
+    accounting_unit_id              INTEGER NOT NULL REFERENCES accounting_unit(id),
+    period_id                       INTEGER NOT NULL REFERENCES accounting_period(id),
+    pouzite_ucetni_metody           TEXT,
+    informace_majetek_komentar      TEXT,
+    pohledavky_zavazky_komentar     TEXT,
+    udalosti_po_rozvahovem_dni      TEXT,
+    prumerny_pocet_zamestnancu      INTEGER,
+    doplnujici_informace            TEXT,
+    version                         INTEGER NOT NULL DEFAULT 1,
+    updated_at                      TEXT NOT NULL DEFAULT (now()::text),
+    updated_by                      INTEGER REFERENCES app_user(id),
+    UNIQUE (accounting_unit_id, period_id)
+);
+
+CREATE TABLE IF NOT EXISTS financial_statement_note_version (
+    id                  SERIAL PRIMARY KEY,
+    note_id             INTEGER NOT NULL REFERENCES financial_statement_note(id),
+    accounting_unit_id  INTEGER NOT NULL REFERENCES accounting_unit(id),
+    period_id           INTEGER NOT NULL REFERENCES accounting_period(id),
+    version             INTEGER NOT NULL,
+    snapshot_json        TEXT NOT NULL,
+    created_at          TEXT NOT NULL DEFAULT (now()::text),
+    created_by          INTEGER REFERENCES app_user(id)
+);
+
+-- ---------------------------------------------------------------------
 -- Indexy
 -- ---------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_posting_line_account ON posting_line(account_id);

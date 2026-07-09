@@ -2435,17 +2435,40 @@ async function handleDepreciateAsset(id) {
 // =====================================================================
 // VÝKAZY
 // =====================================================================
+let REPORT_TAB = "vykazy"; // "vykazy" | "priloha"
+
 async function renderReports() {
   const unit = STATE.unit.id;
   const asOf = document.getElementById("repAsOf")?.value || todayISO();
   const period = document.getElementById("repPeriod")?.value || currentOpenPeriod()?.id;
+
+  const tabsHtml = `
+    <div class="panel">
+      <div class="toolbar">
+        <button type="button" class="${REPORT_TAB === "vykazy" ? "" : "secondary"}" data-action="reports-tab" data-tab="vykazy">Rozvaha + Výsledovka</button>
+        <button type="button" class="${REPORT_TAB === "priloha" ? "" : "secondary"}" data-action="reports-tab" data-tab="priloha">Příloha</button>
+        <div class="spacer"></div>
+        <button type="button" class="secondary" data-action="download-zaverka-pdf" data-period="${period || ""}" data-as-of="${asOf}">Stáhnout kompletní závěrku (PDF)</button>
+      </div>
+    </div>
+  `;
+
+  if (REPORT_TAB === "priloha") {
+    if (!period) {
+      document.getElementById("view").innerHTML = tabsHtml + `<div class="panel"><div class="empty-state">Nejprve vyberte účetní období.</div></div>`;
+      return;
+    }
+    document.getElementById("view").innerHTML = tabsHtml + `<div id="prilohaTabRoot"></div>`;
+    await renderPrilohaTab(unit, period);
+    return;
+  }
 
   const [rozvaha, vysledovka] = await Promise.all([
     api("GET", `/reports/rozvaha?unit=${unit}&asOf=${asOf}`),
     period ? api("GET", `/reports/vysledovka?unit=${unit}&period=${period}`) : Promise.resolve(null),
   ]);
 
-  document.getElementById("view").innerHTML = `
+  document.getElementById("view").innerHTML = tabsHtml + `
     <div class="panel">
       <div class="toolbar">
         <label style="margin:0">Rozvaha ke dni</label><input type="date" id="repAsOf" value="${asOf}" style="width:auto" />
@@ -2486,6 +2509,111 @@ async function renderReports() {
   `;
   document.getElementById("repAsOf").onchange = renderReports;
   document.getElementById("repPeriod").onchange = renderReports;
+}
+
+async function downloadZaverkaPdf(periodId, asOf) {
+  if (!periodId) return toast("Nejprve vyberte účetní období.", "error");
+  try {
+    const headers = {};
+    const token = authToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${API}/reports/zaverka.pdf?unit=${STATE.unit.id}&period=${periodId}&asOf=${asOf || todayISO()}`, { headers });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || res.statusText); }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const per = STATE.periods.find((p) => String(p.id) === String(periodId));
+    a.href = url; a.download = `zaverka-${per ? per.fiscal_year : periodId}.pdf`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (err) { toast(err.message, "error"); }
+}
+
+// ---------------------------------------------------------------------
+// Příloha k účetní závěrce (§ 18 ZoÚ) — auto data vlevo (read-only),
+// vyplnitelný formulář vpravo, historie verzí pod formulářem.
+// ---------------------------------------------------------------------
+let PRILOHA_VERSIONS_OPEN = false;
+
+async function renderPrilohaTab(unit, period) {
+  const root = document.getElementById("prilohaTabRoot");
+  if (!root) return;
+  const data = await api("GET", `/reports/priloha?unit=${unit}&period=${period}`);
+  const note = data.note || {};
+  const auto = data.auto;
+
+  root.innerHTML = `
+    <div class="two-col">
+      <div class="panel">
+        <h2>Automaticky dopočítaná data</h2>
+        <h3 style="margin-top:0">Dlouhodobý majetek</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Majetek</th><th class="num">Poříz. cena</th><th class="num">Oprávky</th><th class="num">Zůstatek</th></tr></thead>
+          <tbody>${auto.majetek.seznam.length ? auto.majetek.seznam.map((m) => `
+            <tr><td>${esc(m.name)}</td><td class="num">${fmtMoney(m.acquisition_cost)}</td><td class="num">${fmtMoney(m.accumulated_depreciation)}</td><td class="num">${fmtMoney(m.net_book_value)}</td></tr>
+          `).join("") : `<tr><td colspan="4" class="empty-state">Žádný evidovaný majetek.</td></tr>`}</tbody>
+          <tfoot><tr><td><strong>Celkem</strong></td><td class="num"><strong>${fmtMoney(auto.majetek.souhrn.poc_cena_celkem)}</strong></td><td class="num"><strong>${fmtMoney(auto.majetek.souhrn.opravky_celkem)}</strong></td><td class="num"><strong>${fmtMoney(auto.majetek.souhrn.zustatek_celkem)}</strong></td></tr></tfoot>
+        </table></div>
+
+        <h3>Pohledávky a závazky po splatnosti</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Doklad</th><th>Protistrana</th><th>Splatnost</th><th class="num">Částka</th><th class="num">Dní po splatnosti</th></tr></thead>
+          <tbody>${[...auto.poSplatnosti.pohledavky, ...auto.poSplatnosti.zavazky].length ? [...auto.poSplatnosti.pohledavky, ...auto.poSplatnosti.zavazky].map((r) => `
+            <tr><td class="mono">${esc(r.doc_number)}</td><td>${esc(r.protistrana || "—")}</td><td>${fmtDate(r.due_date)}</td><td class="num">${fmtMoney(r.total_amount)}</td><td class="num">${r.dni_po_splatnosti}</td></tr>
+          `).join("") : `<tr><td colspan="5" class="empty-state">Žádné pohledávky ani závazky po splatnosti.</td></tr>`}</tbody>
+          <tfoot><tr><td colspan="3"><strong>Pohledávky / Závazky celkem</strong></td><td class="num" colspan="2"><strong>${fmtMoney(auto.poSplatnosti.souhrn.pohledavky_celkem)} / ${fmtMoney(auto.poSplatnosti.souhrn.zavazky_celkem)}</strong></td></tr></tfoot>
+        </table></div>
+      </div>
+
+      <div class="panel">
+        <h2>Textová část přílohy${note.version ? ` <span class="text-dim" style="font-size:12px;font-weight:400">(verze ${note.version})</span>` : ""}</h2>
+        <form data-form="save-priloha" class="form-grid" style="grid-template-columns:1fr">
+          <div><label>Použité účetní metody</label><textarea name="pouzite_ucetni_metody" rows="3">${esc(note.pouzite_ucetni_metody || "")}</textarea></div>
+          <div><label>Informace o dlouhodobém majetku — komentář</label><textarea name="informace_majetek_komentar" rows="3">${esc(note.informace_majetek_komentar || "")}</textarea></div>
+          <div><label>Pohledávky a závazky — komentář</label><textarea name="pohledavky_zavazky_komentar" rows="3">${esc(note.pohledavky_zavazky_komentar || "")}</textarea></div>
+          <div><label>Významné události po rozvahovém dni</label><textarea name="udalosti_po_rozvahovem_dni" rows="3">${esc(note.udalosti_po_rozvahovem_dni || "")}</textarea></div>
+          <div><label>Průměrný počet zaměstnanců</label><input type="number" name="prumerny_pocet_zamestnancu" value="${note.prumerny_pocet_zamestnancu ?? ""}" /></div>
+          <div><label>Doplňující informace</label><textarea name="doplnujici_informace" rows="3">${esc(note.doplnujici_informace || "")}</textarea></div>
+          <div class="form-actions">
+            <button type="submit">Uložit</button>
+          </div>
+        </form>
+        <div class="toolbar" style="margin-top:12px">
+          <button type="button" class="secondary" data-action="toggle-priloha-versions" data-period="${period}">Historie verzí</button>
+        </div>
+        <div id="prilohaVersionsBox"></div>
+      </div>
+    </div>
+  `;
+
+  if (PRILOHA_VERSIONS_OPEN) await renderPrilohaVersions(period);
+
+  const form = root.querySelector('[data-form="save-priloha"]');
+  form.dataset.period = period;
+}
+
+async function renderPrilohaVersions(period) {
+  const box = document.getElementById("prilohaVersionsBox");
+  if (!box) return;
+  const versions = await api("GET", `/reports/priloha/versions?unit=${STATE.unit.id}&period=${period}`);
+  box.innerHTML = `
+    <div class="table-wrap" style="margin-top:8px"><table>
+      <thead><tr><th>Verze</th><th>Uloženo</th></tr></thead>
+      <tbody>${versions.length ? versions.map((v) => `
+        <tr><td class="mono">${v.version}</td><td>${fmtDate(v.created_at)}</td></tr>
+      `).join("") : `<tr><td colspan="2" class="empty-state">Zatím žádná historie verzí.</td></tr>`}</tbody>
+    </table></div>
+  `;
+}
+
+async function handleSavePriloha(form) {
+  const fd = new FormData(form);
+  const body = Object.fromEntries(fd.entries());
+  body.period = form.dataset.period;
+  body.userId = STATE.user.id;
+  await api("PUT", "/reports/priloha", body);
+  toast("Příloha byla uložena.");
+  await renderPrilohaTab(STATE.unit.id, form.dataset.period);
 }
 
 // =====================================================================
@@ -3051,6 +3179,20 @@ document.addEventListener("click", async (e) => {
         if (!confirm("Smazat šablonu pravidelné faktury?")) break;
         await api("DELETE", `/recurring/${id}`); toast("Šablona byla smazána."); renderRecurring(); break;
       }
+
+      case "reports-tab": REPORT_TAB = e.target.closest("[data-tab]").dataset.tab; renderReports(); break;
+      case "download-zaverka-pdf": {
+        const el = e.target.closest("[data-period]");
+        await downloadZaverkaPdf(el.dataset.period, el.dataset.asOf);
+        break;
+      }
+      case "toggle-priloha-versions": {
+        PRILOHA_VERSIONS_OPEN = !PRILOHA_VERSIONS_OPEN;
+        const period = e.target.closest("[data-period]").dataset.period;
+        if (PRILOHA_VERSIONS_OPEN) await renderPrilohaVersions(period);
+        else document.getElementById("prilohaVersionsBox").innerHTML = "";
+        break;
+      }
     }
   } catch (err) {
     toast(err.message, "error");
@@ -3091,6 +3233,7 @@ document.addEventListener("submit", async (e) => {
       case "create-offer": await handleCreateOffer(e.target); break;
       case "send-offer-email": await handleSendOfferEmail(e.target); break;
       case "create-recurring": await handleCreateRecurring(e.target); break;
+      case "save-priloha": await handleSavePriloha(e.target); break;
     }
   } catch (err) {
     toast(err.message, "error");

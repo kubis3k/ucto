@@ -222,4 +222,59 @@ async function knihaPohledavkyZavazky(unitId) {
   }));
 }
 
-module.exports = { hlavniKniha, rozvaha, vysledovka, obratDph, knihaPohledavkyZavazky, accountNaturalBalance };
+// Automaticky dopočítaná data pro přílohu k účetní závěrce (§ 18 ZoÚ) —
+// majetek (stejný výpočet jako routes/assets.js:7-16) a pohledávky/závazky
+// po splatnosti (knihaPohledavkyZavazky() filtr dni_po_splatnosti > 0,
+// rozdělené podle doc_type). Vše se počítá živě, NEUKLÁDÁ se (viz plán
+// úkolu 3 v flow-state.md — auto data by jinak držela nekonzistentní kopii).
+async function prilohaAutoData(unitId, periodId, asOfDate) {
+  const assets = await store.all(
+    "SELECT * FROM fixed_asset WHERE accounting_unit_id = ? ORDER BY acquisition_date",
+    [unitId]
+  );
+  const majetekSeznam = [];
+  let pocCenaCelkem = 0, opravkyCelkem = 0, zustatekCelkem = 0;
+  for (const a of assets) {
+    const dep = await store.get(
+      "SELECT COALESCE(SUM(amount),0) AS total FROM depreciation_entry WHERE fixed_asset_id = ?",
+      [a.id]
+    );
+    const netBookValue = a.acquisition_cost - dep.total;
+    majetekSeznam.push({
+      name: a.name,
+      acquisition_cost: a.acquisition_cost,
+      acquisition_date: a.acquisition_date,
+      accumulated_depreciation: dep.total,
+      net_book_value: netBookValue,
+    });
+    pocCenaCelkem += a.acquisition_cost;
+    opravkyCelkem += dep.total;
+    zustatekCelkem += netBookValue;
+  }
+
+  const kniha = await knihaPohledavkyZavazky(unitId);
+  const poSplatnosti = kniha.filter((r) => (r.dni_po_splatnosti || 0) > 0);
+  const pohledavky = poSplatnosti.filter((r) => r.doc_type === "faktura_vydana");
+  const zavazky = poSplatnosti.filter((r) => r.doc_type === "faktura_prijata");
+
+  return {
+    majetek: {
+      seznam: majetekSeznam,
+      souhrn: {
+        poc_cena_celkem: pocCenaCelkem,
+        opravky_celkem: opravkyCelkem,
+        zustatek_celkem: zustatekCelkem,
+      },
+    },
+    poSplatnosti: {
+      pohledavky,
+      zavazky,
+      souhrn: {
+        pohledavky_celkem: pohledavky.reduce((s, r) => s + r.total_amount, 0),
+        zavazky_celkem: zavazky.reduce((s, r) => s + r.total_amount, 0),
+      },
+    },
+  };
+}
+
+module.exports = { hlavniKniha, rozvaha, vysledovka, obratDph, knihaPohledavkyZavazky, accountNaturalBalance, prilohaAutoData };

@@ -518,6 +518,39 @@ CREATE TABLE IF NOT EXISTS recurring_invoice_line (
 );
 
 -- ---------------------------------------------------------------------
+-- Příloha k účetní závěrce (§ 18 ZoÚ, § 39 vyhl. 500/2002 Sb.) — mikro
+-- účetní jednotka, zjednodušený rozsah. Kvalitativní textová pole, 1 řádek
+-- na období (aktuální stav) + append-only historie verzí (archivační
+-- povinnost, stejný princip jako audit_log).
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS financial_statement_note (
+    id                              INTEGER PRIMARY KEY AUTOINCREMENT,
+    accounting_unit_id              INTEGER NOT NULL REFERENCES accounting_unit(id),
+    period_id                       INTEGER NOT NULL REFERENCES accounting_period(id),
+    pouzite_ucetni_metody           TEXT,
+    informace_majetek_komentar      TEXT,
+    pohledavky_zavazky_komentar     TEXT,
+    udalosti_po_rozvahovem_dni      TEXT,
+    prumerny_pocet_zamestnancu      INTEGER,
+    doplnujici_informace            TEXT,
+    version                         INTEGER NOT NULL DEFAULT 1,
+    updated_at                      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_by                      INTEGER REFERENCES app_user(id),
+    UNIQUE (accounting_unit_id, period_id)
+);
+
+CREATE TABLE IF NOT EXISTS financial_statement_note_version (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    note_id             INTEGER NOT NULL REFERENCES financial_statement_note(id),
+    accounting_unit_id  INTEGER NOT NULL REFERENCES accounting_unit(id),
+    period_id           INTEGER NOT NULL REFERENCES accounting_period(id),
+    version             INTEGER NOT NULL,
+    snapshot_json        TEXT NOT NULL,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by          INTEGER REFERENCES app_user(id)
+);
+
+-- ---------------------------------------------------------------------
 -- Indexy
 -- ---------------------------------------------------------------------
 CREATE INDEX IF NOT EXISTS idx_posting_line_account ON posting_line(account_id);
