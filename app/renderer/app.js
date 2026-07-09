@@ -56,6 +56,78 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 // =====================================================================
 let AUTH_TAB = "login";
 
+// Podpisový prvek přihlašovací obrazovky: kompaktní ROZVAHA, která vždy
+// „sedí" — součet aktiv = součet pasiv. Vtěluje podstatu podvojného
+// účetnictví (MD = D) a používá reálný kontext firmy. Po načtení se
+// číslice sečtou a oba součty se zamknou na shodnou hodnotu (viz
+// animateBalanceSheet). Nahrazuje dřívější ledger ticker.
+const BALANCE_SHEET = {
+  date: "30. 6. 2026",
+  aktiva: [
+    { code: "221", name: "Bankovní účet", val: 842000 },
+    { code: "311", name: "Odběratelé", val: 318000 },
+    { code: "022", name: "Hmotný majetek", val: 80000 },
+  ],
+  pasiva: [
+    { code: "321", name: "Dodavatelé", val: 214000 },
+    { code: "411", name: "Základní kapitál", val: 200000 },
+    { code: "431", name: "Výsledek hospodaření", val: 826000 },
+  ],
+};
+function bsRows(side) {
+  return BALANCE_SHEET[side].map((r) => `
+    <div class="bs-row">
+      <span class="bs-code">${r.code}</span>
+      <span class="bs-name">${esc(r.name)}</span>
+      <span class="bs-fig" data-val="${r.val}">0</span>
+    </div>`).join("");
+}
+function renderBalanceSheet() {
+  const total = BALANCE_SHEET.aktiva.reduce((s, r) => s + r.val, 0);
+  return `
+    <div class="bs-card" role="img" aria-label="Ukázková rozvaha — aktiva se rovnají pasivům, ${total.toLocaleString("cs-CZ")} Kč">
+      <div class="bs-head"><span>Rozvaha</span><span class="bs-date">k ${BALANCE_SHEET.date}</span></div>
+      <div class="bs-cols">
+        <div class="bs-col"><div class="bs-col-label">Aktiva</div>${bsRows("aktiva")}</div>
+        <div class="bs-col"><div class="bs-col-label">Pasiva</div>${bsRows("pasiva")}</div>
+      </div>
+      <div class="bs-total">
+        <span class="bs-total-side"><span class="bs-total-cap">Σ Aktiva</span><span class="bs-fig bs-total-fig" data-val="${total}">0</span></span>
+        <span class="bs-eq" aria-hidden="true">=</span>
+        <span class="bs-total-side"><span class="bs-total-cap">Σ Pasiva</span><span class="bs-fig bs-total-fig" data-val="${total}">0</span></span>
+      </div>
+      <div class="bs-balanced" id="bsBalanced">Aktiva = Pasiva · knihy sedí</div>
+    </div>`;
+}
+function animateBalanceSheet() {
+  const figs = [...document.querySelectorAll(".bs-fig")];
+  if (!figs.length) return;
+  const done = () => document.getElementById("bsBalanced")?.classList.add("show");
+  const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduce) {
+    figs.forEach((f) => { f.textContent = Number(f.dataset.val).toLocaleString("cs-CZ"); });
+    done(); return;
+  }
+  const dur = 900, t0 = performance.now(), ease = (t) => 1 - Math.pow(1 - t, 3);
+  function frame(now) {
+    const p = Math.min(1, (now - t0) / dur), k = ease(p);
+    figs.forEach((f) => { f.textContent = Math.round(Number(f.dataset.val) * k).toLocaleString("cs-CZ"); });
+    if (p < 1) requestAnimationFrame(frame); else done();
+  }
+  requestAnimationFrame(frame);
+}
+
+const EYE_PATHS = '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"/><circle cx="12" cy="12" r="3"/>';
+const EYE_OFF_PATHS = '<path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 7 11 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 1 12s4 7 11 7a9.16 9.16 0 0 0 5.39-1.61"/><path d="M9.53 9.53a3 3 0 0 0 4.24 4.24"/><path d="M2 2l20 20"/>';
+function passwordField(name, attrs = "") {
+  return `<div class="auth-password-field">
+    <input type="password" name="${name}" ${attrs} />
+    <button type="button" class="auth-password-toggle" data-action="toggle-password" tabindex="-1" aria-label="Zobrazit heslo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${EYE_PATHS}</svg>
+    </button>
+  </div>`;
+}
+
 function renderAuthScreen() {
   const screen = document.getElementById("authScreen");
   screen.classList.remove("hidden");
@@ -65,24 +137,55 @@ function renderAuthScreen() {
     ["login", "Přihlásit se"],
     ["set-password", "Nastavit heslo"],
     ["register", "Založit firmu"],
-    ["bankid", "BankID (jednatel)"],
+    ["bankid", "BankID"],
   ];
 
   screen.innerHTML = `
-    <div class="auth-card">
-      <h1>Globaal Elevate — Účetní systém</h1>
-      <div class="auth-sub">Přihlášení je sdílené podle firmy — kolegové se stejnou firmou vidí stejná data.</div>
-      <div class="auth-tabs">
-        ${tabs.map(([id, label]) => `<button type="button" class="small ${AUTH_TAB === id ? "active" : ""}" data-action="auth-tab" data-tab="${id}">${label}</button>`).join("")}
+    <div class="auth-brand-panel">
+      <div class="auth-brand-inner">
+        <div class="auth-brand-top">
+          <div class="brand-mark">GE</div>
+          <div class="auth-brand-wordmark">Globaal Elevate<span>Účetní systém</span></div>
+        </div>
+        <div class="auth-hero">
+          <h2>Nezávislé účetnictví.<br><em>Knihy, které vždy sedí.</em></h2>
+          <p>Doklady, účetní deník, DPH i závěrka na jednom místě — průkazně a dle zákona, bez cizího softwaru.</p>
+        </div>
+        ${renderBalanceSheet()}
       </div>
-      <div id="authTabBody"></div>
-      <div class="text-dim" style="font-size:11.5px;margin-top:20px;text-align:center">
-        <a href="/tos" target="_blank" style="color:inherit">Podmínky užití</a> ·
-        <a href="/privacy-policy" target="_blank" style="color:inherit">Ochrana osobních údajů</a>
+      <div class="auth-brand-footer">
+        <span class="auth-legal">Vedeno dle zákona č. 563/1991 Sb., o účetnictví</span>
+        <span class="auth-links"><a href="/tos" target="_blank">Podmínky</a><span class="sep">·</span><a href="/privacy-policy" target="_blank">Soukromí</a></span>
+      </div>
+    </div>
+    <div class="auth-form-panel">
+      <div class="auth-card">
+        <h1>Přihlášení</h1>
+        <div class="auth-sub">Přístup je sdílený podle firmy — kolegové ve stejné firmě vidí stejná data.</div>
+        <div class="auth-tabs">
+          <div class="auth-tabs-indicator" id="authTabsIndicator"></div>
+          ${tabs.map(([id, label]) => `<button type="button" class="${AUTH_TAB === id ? "active" : ""}" data-action="auth-tab" data-tab="${id}">${label}</button>`).join("")}
+        </div>
+        <div id="authTabBody"></div>
+        <div class="auth-secure">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          Data zůstávají u vás. Zabezpečené přihlášení.
+        </div>
       </div>
     </div>
   `;
   renderAuthTabBody();
+  positionAuthTabIndicator();
+  animateBalanceSheet();
+}
+
+function positionAuthTabIndicator() {
+  const tabsEl = document.querySelector(".auth-tabs");
+  const indicator = document.getElementById("authTabsIndicator");
+  const activeBtn = tabsEl?.querySelector("button.active");
+  if (!tabsEl || !indicator || !activeBtn) return;
+  indicator.style.width = `${activeBtn.offsetWidth}px`;
+  indicator.style.transform = `translateX(${activeBtn.offsetLeft - 3}px)`;
 }
 
 function renderAuthTabBody() {
@@ -90,18 +193,18 @@ function renderAuthTabBody() {
   if (AUTH_TAB === "login") {
     body.innerHTML = `
       <form data-form="auth-login">
-        <label>E-mail</label><input type="email" name="email" required />
-        <label>Heslo</label><input type="password" name="password" required />
+        <label>E-mail</label><input type="email" name="email" autocomplete="email" required />
+        <label>Heslo</label>${passwordField("password", 'autocomplete="current-password" required')}
         <div class="form-actions"><button type="submit">Přihlásit se</button></div>
       </form>
       <div id="authError" class="auth-error"></div>
     `;
   } else if (AUTH_TAB === "set-password") {
     body.innerHTML = `
-      <p class="text-dim" style="font-size:12.5px;margin-top:0">Pro účty vytvořené před zavedením přihlašování (např. původní uživatel "Luigi") — nastavte si heslo poprvé podle e-mailu, na který byl účet založen.</p>
+      <p class="auth-hint">Pro účty vytvořené před zavedením přihlašování (např. původní uživatel "Luigi") — nastavte si heslo poprvé podle e-mailu, na který byl účet založen.</p>
       <form data-form="auth-set-password">
-        <label>E-mail</label><input type="email" name="email" required />
-        <label>Nové heslo (min. 8 znaků)</label><input type="password" name="password" minlength="8" required />
+        <label>E-mail</label><input type="email" name="email" autocomplete="email" required />
+        <label>Nové heslo (min. 8 znaků)</label>${passwordField("password", 'autocomplete="new-password" minlength="8" required')}
         <div class="form-actions"><button type="submit">Nastavit heslo a přihlásit</button></div>
       </form>
       <div id="authError" class="auth-error"></div>
@@ -113,15 +216,15 @@ function renderAuthTabBody() {
         <label>IČO</label><input type="text" name="ico" required />
         <label>DIČ (nepovinné)</label><input type="text" name="dic" />
         <label>Vaše jméno</label><input type="text" name="full_name" required />
-        <label>E-mail</label><input type="email" name="email" required />
-        <label>Heslo (min. 8 znaků)</label><input type="password" name="password" minlength="8" required />
+        <label>E-mail</label><input type="email" name="email" autocomplete="email" required />
+        <label>Heslo (min. 8 znaků)</label>${passwordField("password", 'autocomplete="new-password" minlength="8" required')}
         <div class="form-actions"><button type="submit">Založit firmu</button></div>
       </form>
       <div id="authError" class="auth-error"></div>
     `;
   } else if (AUTH_TAB === "bankid") {
     body.innerHTML = `
-      <p class="text-dim" style="font-size:12.5px;margin-top:0">Ověření je nyní v testovacím (mock) režimu — po zadání IČO vyberte své jméno ze seznamu jednatelů firmy podle rejstříku.</p>
+      <p class="auth-hint">Ověření je nyní v testovacím (mock) režimu — po zadání IČO vyberte své jméno ze seznamu jednatelů firmy podle rejstříku.</p>
       <form data-form="auth-bankid-start">
         <label>IČO firmy</label><input type="text" name="ico" required />
         <div class="form-actions"><button type="submit">Pokračovat</button></div>
@@ -207,15 +310,17 @@ function renderAcceptInviteScreen(token) {
   screen.classList.remove("hidden");
   document.getElementById("app").classList.add("hidden");
   screen.innerHTML = `
-    <div class="auth-card">
-      <h1>Přijetí pozvánky</h1>
-      <div class="auth-sub">Nastavte si jméno a heslo pro sdílený přístup k firmě.</div>
-      <form data-form="accept-invite" data-token="${esc(token)}">
-        <label>Vaše jméno</label><input type="text" name="full_name" required />
-        <label>Heslo (min. 8 znaků)</label><input type="password" name="password" minlength="8" required />
-        <div class="form-actions"><button type="submit">Přijmout pozvánku</button></div>
-      </form>
-      <div id="authError" class="auth-error"></div>
+    <div class="auth-form-panel" style="width:100%">
+      <div class="auth-card">
+        <h1>Přijetí pozvánky</h1>
+        <div class="auth-sub">Nastavte si jméno a heslo pro sdílený přístup k firmě.</div>
+        <form data-form="accept-invite" data-token="${esc(token)}">
+          <label>Vaše jméno</label><input type="text" name="full_name" required />
+          <label>Heslo (min. 8 znaků)</label>${passwordField("password", 'autocomplete="new-password" minlength="8" required')}
+          <div class="form-actions"><button type="submit">Přijmout pozvánku</button></div>
+        </form>
+        <div id="authError" class="auth-error"></div>
+      </div>
     </div>
   `;
 }
