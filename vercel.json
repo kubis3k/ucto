@@ -6,7 +6,8 @@
     { "source": "/tos", "destination": "/app/renderer/tos.html" },
     { "source": "/privacy-policy", "destination": "/app/renderer/privacy-policy.html" },
     { "source": "/app.js", "destination": "/app/renderer/app.js" },
-    { "source": "/style.css", "destination": "/app/renderer/style.css" }
+    { "source": "/style.css", "destination": "/app/renderer/style.css" },
+    { "source": "/sw.js", "destination": "/app/renderer/sw.js" }
   ],
   "crons": [
     { "path": "/api/cron/recurring", "schedule": "0 6 * * *" }

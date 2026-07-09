@@ -3102,6 +3102,28 @@ window.addEventListener("hashchange", router);
 window.addEventListener("DOMContentLoaded", checkAuthAndStart);
 window.addEventListener("DOMContentLoaded", refreshThemeIcons);
 
+// Tenký klient (2026-07-09): appka nemá vlastní data, jede nad web API.
+// Offline = Service Worker (sw.js) vrací poslední cachovanou GET odpověď,
+// zápisy ale selžou normální chybou (žádné tiché fronty) — tenhle banner
+// jen dá uživateli vědět PROČ může vidět neaktuální data / chybu při uložení.
+function updateOfflineBanner() {
+  let banner = document.getElementById("offlineBanner");
+  if (!navigator.onLine) {
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.id = "offlineBanner";
+      banner.className = "offline-banner";
+      banner.textContent = "Offline — zobrazena poslední stažená data, ukládání není možné.";
+      document.body.appendChild(banner);
+    }
+  } else if (banner) {
+    banner.remove();
+  }
+}
+window.addEventListener("online", updateOfflineBanner);
+window.addEventListener("offline", updateOfflineBanner);
+window.addEventListener("DOMContentLoaded", updateOfflineBanner);
+
 async function checkAuthAndStart() {
   const inviteMatch = location.hash.match(/^#accept-invite=(.+)$/);
   if (inviteMatch) return renderAcceptInviteScreen(inviteMatch[1]);

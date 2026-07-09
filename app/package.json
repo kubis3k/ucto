@@ -40,17 +40,8 @@
     "files": [
       "main.js",
       "preload.js",
-      "server/**/*",
       "renderer/**/*",
-      "node_modules/**/*",
-      "!node_modules/electron-builder/**/*",
-      "!node_modules/electron/**/*"
-    ],
-    "extraResources": [
-      {
-        "from": "node_modules/sql.js/dist/sql-wasm.wasm",
-        "to": "sql-wasm.wasm"
-      }
+      "desktop-config.json"
     ],
     "win": {
       "target": [

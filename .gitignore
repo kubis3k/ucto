@@ -6,6 +6,7 @@ app/.devdata/
 .env
 .env.local
 jwt-secret.txt
+app/desktop-config.json
 
 # Local editor/agent tooling — not part of the application
 .claude/

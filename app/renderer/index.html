@@ -33,6 +33,14 @@
     if (!window.ucetnictvi) {
       window.ucetnictvi = { apiBase: location.port === "5173" ? "http://127.0.0.1:4000/api" : "/api" };
     }
+    // Tenký klient (2026-07-09): Service Worker cachuje poslední úspěšné GET
+    // /api/* odpovědi + appku samotnou, aby offline zůstalo aspoň read-only
+    // zobrazení naposledy stažených dat (nikdy offline zápis — viz sw.js).
+    // Jen na skutečné doméně (ne na dev :5173 statickém serveru, tam sw.js
+    // neexistuje a registrace by jen hlučela do konzole).
+    if ("serviceWorker" in navigator && location.port !== "5173") {
+      navigator.serviceWorker.register("/sw.js").catch((e) => console.warn("sw register:", e));
+    }
   </script>
   <div id="splashScreen" class="splash-screen">
     <div class="splash-logo-plate"><img src="assets/logo.png" alt="Globaal Elevate Production" class="splash-logo" /></div>
