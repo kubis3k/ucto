@@ -289,22 +289,24 @@ td.num, th.num { text-align: right; }
 /* Tlačítka — přepracováno: primární zůstává plné (jasná CTA), sekundární a
    danger jsou teď "ghost" (průhledné pozadí + barevný obrys), ne plná šedá
    krabička jako předtím — vzdušnější, méně "AI generic" vzhled. */
+/* Všechna tlačítka průhledná (ghost) — i primární CTA, ne jen sekundární/
+   danger. Odlišují se jen barvou textu/obrysu, ne plnou výplní. */
 button, .btn {
-  background: var(--brand); color: #fff; border: 1px solid transparent; border-radius: 10px;
+  background: transparent; color: var(--brand); border: 1px solid var(--brand); border-radius: 10px;
   padding: 9px 17px; font-size: 13px; cursor: pointer; font-weight: 600; font-family: inherit;
   transition: background 0.15s ease, border-color 0.15s ease, transform 0.06s ease, box-shadow 0.15s ease;
   display: inline-flex; align-items: center; gap: 7px;
 }
-button:hover, .btn:hover { background: var(--brand-hover); box-shadow: 0 4px 14px rgba(77, 124, 254, 0.28); }
+button:hover, .btn:hover { background: var(--brand-soft); box-shadow: none; }
 button:active, .btn:active { transform: translateY(1px); box-shadow: none; }
 button:focus-visible, .btn:focus-visible, a:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--brand-ring); }
-button.secondary, .btn.secondary { background: transparent; color: var(--text-dim); border-color: var(--border-strong); box-shadow: none; }
-button.secondary:hover, .btn.secondary:hover { background: var(--hover); color: var(--text); border-color: var(--text-faint); box-shadow: none; }
-button.danger { background: transparent; color: var(--red); border-color: rgba(245, 101, 101, 0.4); }
-button.danger:hover { background: var(--red-soft); box-shadow: none; }
+button.secondary, .btn.secondary { color: var(--text-dim); border-color: var(--border-strong); }
+button.secondary:hover, .btn.secondary:hover { background: var(--hover); color: var(--text); border-color: var(--text-faint); }
+button.danger { color: var(--red); border-color: rgba(245, 101, 101, 0.4); }
+button.danger:hover { background: var(--red-soft); }
 button.small, .btn.small { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
-button:disabled:hover { background: var(--brand); box-shadow: none; }
+button:disabled:hover { background: transparent; box-shadow: none; }
 
 /* ---------------------------------------------------------------- Forms */
 input, select, textarea {
@@ -328,11 +330,11 @@ input[type="file"] {
   padding: 7px 10px; font-size: 12.5px; color: var(--text-dim);
 }
 input[type="file"]::file-selector-button {
-  background: var(--brand); color: #fff; border: none; border-radius: var(--radius-sm);
+  background: transparent; color: var(--brand); border: 1px solid var(--brand); border-radius: var(--radius-sm);
   padding: 7px 13px; font-size: 12.5px; font-weight: 600; font-family: inherit;
   cursor: pointer; margin-right: 10px; transition: background 0.15s ease;
 }
-input[type="file"]::file-selector-button:hover { background: var(--brand-hover); }
+input[type="file"]::file-selector-button:hover { background: var(--brand-soft); }
 label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px; margin-top: 12px; font-weight: 500; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 2px 18px; }
 .form-actions { margin-top: 20px; display: flex; gap: 10px; }
