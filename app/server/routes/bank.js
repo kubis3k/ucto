@@ -135,7 +135,7 @@ router.post("/:id/quick-post", async (req, res) => {
   const { account_id, created_by, description } = req.body;
   try {
     const posting = await store.transaction(async () => {
-      const line = await store.get("SELECT * FROM bank_statement_line WHERE id = ?", [req.params.id]);
+      const line = await store.get("SELECT * FROM bank_statement_line WHERE id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
       if (!line) throw new Error("Řádek výpisu nenalezen.");
       if (line.matched_document_id || line.posting_id) throw new Error("Pohyb je již zaúčtovaný.");
 

@@ -8,6 +8,7 @@
   "private": true,
   "scripts": {
     "start": "electron .",
+    "test": "node --test test/*.test.js",
     "dev:server": "node server/index.js",
     "dev:renderer": "node dev-static-server.js",
     "dist": "electron-builder --win nsis",

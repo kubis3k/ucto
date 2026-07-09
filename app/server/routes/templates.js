@@ -25,7 +25,7 @@ router.get("/", async (req, res) => {
 
 // POST /api/templates — vytvoření předkontace
 router.post("/", async (req, res) => {
-  const { accounting_unit_id, name, doc_type, description, lines } = req.body;
+  const { name, doc_type, description, lines } = req.body;
   if (!Array.isArray(lines) || lines.length < 2) {
     return res.status(400).json({ error: "Předkontace musí mít alespoň dva řádky (MD a D)." });
   }
@@ -33,7 +33,7 @@ router.post("/", async (req, res) => {
     const result = await store.transaction(async () => {
       await store.run(
         `INSERT INTO posting_template (accounting_unit_id, name, doc_type, description) VALUES (?,?,?,?)`,
-        [accounting_unit_id, name, doc_type || null, description || null]
+        [req.user.accountingUnitId, name, doc_type || null, description || null]
       );
       const id = (await store.get("SELECT last_insert_rowid() AS id")).id;
       for (const l of lines) {
@@ -51,7 +51,7 @@ router.post("/", async (req, res) => {
 // DELETE /api/templates/:id — deaktivace předkontace (číselník, ne účetní záznam)
 router.delete("/:id", async (req, res) => {
   try {
-    await store.run("UPDATE posting_template SET active = 0 WHERE id = ?", [req.params.id]);
+    await store.run("UPDATE posting_template SET active = 0 WHERE id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
     store.persist();
     res.status(204).end();
   } catch (err) { res.status(400).json({ error: err.message }); }

@@ -66,7 +66,7 @@ router.post("/", async (req, res) => {
 // GET /api/postings/:id — detail zápisu s řádky
 router.get("/:id", async (req, res) => {
   try {
-    const header = await store.get("SELECT * FROM posting WHERE id = ?", [req.params.id]);
+    const header = await store.get("SELECT * FROM posting WHERE id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
     if (!header) return res.status(404).json({ error: "Zápis nenalezen" });
     const lines = await store.all(
       `SELECT pl.*, coa.account_number, coa.name AS account_name

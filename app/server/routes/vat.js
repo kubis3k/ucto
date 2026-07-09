@@ -28,6 +28,8 @@ router.get("/ledger", async (req, res) => {
 router.post("/ledger", async (req, res) => {
   const { document_id, direction, vat_base, vat_rate, vat_amount, counterparty_dic, duzp } = req.body;
   try {
+    const doc = await store.get("SELECT id FROM document WHERE id = ? AND accounting_unit_id = ?", [document_id, req.user.accountingUnitId]);
+    if (!doc) return res.status(404).json({ error: "Doklad nenalezen" });
     const total = Number(vat_base) + Number(vat_amount);
     const requiresKh = total >= KH_THRESHOLD;
     if (requiresKh && !counterparty_dic) {

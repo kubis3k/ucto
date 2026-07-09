@@ -17,12 +17,12 @@ router.get("/", async (req, res) => {
 });
 
 router.post("/", async (req, res) => {
-  const { accounting_unit_id, name, acquisition_cost, acquisition_date, useful_life_months, account_id, depreciation_account_id, residual_value } = req.body;
+  const { name, acquisition_cost, acquisition_date, useful_life_months, account_id, depreciation_account_id, residual_value } = req.body;
   try {
     await store.run(
       `INSERT INTO fixed_asset (accounting_unit_id, name, acquisition_cost, acquisition_date, useful_life_months, account_id, depreciation_account_id, residual_value)
        VALUES (?,?,?,?,?,?,?,?)`,
-      [accounting_unit_id, name, acquisition_cost, acquisition_date, useful_life_months, account_id, depreciation_account_id || null, residual_value || 0]
+      [req.user.accountingUnitId, name, acquisition_cost, acquisition_date, useful_life_months, account_id, depreciation_account_id || null, residual_value || 0]
     );
     const id = (await store.get("SELECT last_insert_rowid() AS id")).id;
     store.persist();
@@ -37,7 +37,7 @@ router.post("/:id/depreciate", async (req, res) => {
   try {
     const result = await store.transaction(async () => {
       await assertPeriodOpen(period_id);
-      const asset = await store.get("SELECT * FROM fixed_asset WHERE id = ?", [req.params.id]);
+      const asset = await store.get("SELECT * FROM fixed_asset WHERE id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
       if (!asset) throw new Error("Majetková karta nenalezena.");
       if (!asset.depreciation_account_id) throw new Error("Majetková karta nemá nastavený účet oprávek (082).");
 

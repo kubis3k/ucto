@@ -14,7 +14,8 @@ router.get("/", async (req, res) => {
 // POST /api/inventory/generate — vygeneruje inventurní soupis k rozvahovému dni
 // (zůstatky rozvahových účtů majetku, pohledávek, závazků, pokladny — § 29-30 ZoÚ)
 router.post("/generate", async (req, res) => {
-  const { accounting_unit_id, period_id, as_of_date, created_by, note } = req.body;
+  const { period_id, as_of_date, created_by, note } = req.body;
+  const accounting_unit_id = req.user.accountingUnitId;
   try {
     const result = await store.transaction(async () => {
       await store.run(
@@ -52,7 +53,7 @@ router.post("/generate", async (req, res) => {
 // GET /api/inventory/:id — detail inventurního soupisu
 router.get("/:id", async (req, res) => {
   try {
-    const header = await store.get("SELECT * FROM inventory_check WHERE id = ?", [req.params.id]);
+    const header = await store.get("SELECT * FROM inventory_check WHERE id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
     if (!header) return res.status(404).json({ error: "Inventurní soupis nenalezen" });
     const lines = await store.all(
       `SELECT il.*, coa.account_number, coa.name AS account_name
@@ -68,7 +69,12 @@ router.get("/:id", async (req, res) => {
 router.put("/:id/lines/:lineId", async (req, res) => {
   const { physical_balance, note } = req.body;
   try {
-    const line = await store.get("SELECT * FROM inventory_check_line WHERE id = ? AND inventory_check_id = ?", [req.params.lineId, req.params.id]);
+    const line = await store.get(
+      `SELECT icl.* FROM inventory_check_line icl
+       JOIN inventory_check ic ON ic.id = icl.inventory_check_id
+       WHERE icl.id = ? AND icl.inventory_check_id = ? AND ic.accounting_unit_id = ?`,
+      [req.params.lineId, req.params.id, req.user.accountingUnitId]
+    );
     if (!line) return res.status(404).json({ error: "Řádek soupisu nenalezen" });
     const difference = Number(physical_balance) - line.book_balance;
     await store.run(

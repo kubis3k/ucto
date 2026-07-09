@@ -51,11 +51,11 @@ router.post("/periods", async (req, res) => {
 router.post("/periods/:id/close", async (req, res) => {
   const { closed_by } = req.body;
   try {
-    const before = await store.get("SELECT * FROM accounting_period WHERE id = ? AND status = 'otevrene'", [req.params.id]);
+    const before = await store.get("SELECT * FROM accounting_period WHERE id = ? AND status = 'otevrene' AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
     if (!before) return res.status(400).json({ error: "Období nelze uzavřít — buď neexistuje, nebo je již uzavřené." });
 
     await store.transaction(async () => {
-      await store.run("UPDATE accounting_period SET status = 'uzavrene', closed_at = datetime('now'), closed_by = ? WHERE id = ?", [closed_by, req.params.id]);
+      await store.run("UPDATE accounting_period SET status = 'uzavrene', closed_at = datetime('now'), closed_by = ? WHERE id = ? AND accounting_unit_id = ?", [closed_by, req.params.id, req.user.accountingUnitId]);
       await writeAuditLog({ unitId: before.accounting_unit_id, userId: closed_by, action: "PERIOD_CLOSE", table: "accounting_period", entityId: req.params.id, before, after: { status: "uzavrene" } });
     });
     res.json(await store.get("SELECT * FROM accounting_period WHERE id = ?", [req.params.id]));
