@@ -32,6 +32,10 @@ function loadDesktopConfig() {
 
 function bootUrl(config) {
   const base = config.webBaseUrl.replace(/\/+$/, "");
+  // bypassToken je jen pro Vercel Deployment Protection (SSO brána na preview
+  // URL) — produkční vlastní domény tuto ochranu obvykle nemají, pak je
+  // bypassToken prázdný a URL zůstává čistá.
+  if (!config.bypassToken) return `${base}/`;
   return `${base}/?x-vercel-protection-bypass=${encodeURIComponent(config.bypassToken)}&x-vercel-set-bypass-cookie=true`;
 }
 
