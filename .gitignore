@@ -1,6 +1,5 @@
 node_modules/
-app/dist/
-app/dist2/
+app/dist*/
 app/.devdata/
 *.sqlite
 *.sqlite-journal
