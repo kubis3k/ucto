@@ -76,6 +76,16 @@ async function migrate() {
   await ensureColumn("app_user", "bankid_sub", "TEXT");
   // Přímé zaúčtování bankovního/pokladního pohybu bez dokladu (poplatky, úroky).
   await ensureColumn("bank_statement_line", "posting_id", "INTEGER");
+  // Fakturační branding a hlavička vydaných faktur (logo/razítko/podpis jako
+  // data URL — malé obrázky, žádné externí úložiště potřeba) + sídlo/kontakt.
+  await ensureColumn("accounting_unit", "address", "TEXT");
+  await ensureColumn("accounting_unit", "email", "TEXT");
+  await ensureColumn("accounting_unit", "phone", "TEXT");
+  await ensureColumn("accounting_unit", "logo_data_url", "TEXT");
+  await ensureColumn("accounting_unit", "stamp_data_url", "TEXT");
+  await ensureColumn("accounting_unit", "signature_data_url", "TEXT");
+  // E-mail kontaktu — výchozí adresát při odeslání vydané faktury.
+  await ensureColumn("contact", "email", "TEXT");
 }
 
 function persist() {

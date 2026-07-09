@@ -30,8 +30,22 @@ CREATE TABLE IF NOT EXISTS accounting_unit (
     fiscal_year_start_month INTEGER NOT NULL DEFAULT 1 CHECK (fiscal_year_start_month BETWEEN 1 AND 12),
     iban                TEXT,
     bank_account        TEXT,
+    address             TEXT,
+    email               TEXT,
+    phone               TEXT,
+    logo_data_url       TEXT,
+    stamp_data_url      TEXT,
+    signature_data_url  TEXT,
     created_at          TEXT NOT NULL DEFAULT (now()::text)
 );
+ALTER TABLE accounting_unit ADD COLUMN IF NOT EXISTS iban TEXT;
+ALTER TABLE accounting_unit ADD COLUMN IF NOT EXISTS bank_account TEXT;
+ALTER TABLE accounting_unit ADD COLUMN IF NOT EXISTS address TEXT;
+ALTER TABLE accounting_unit ADD COLUMN IF NOT EXISTS email TEXT;
+ALTER TABLE accounting_unit ADD COLUMN IF NOT EXISTS phone TEXT;
+ALTER TABLE accounting_unit ADD COLUMN IF NOT EXISTS logo_data_url TEXT;
+ALTER TABLE accounting_unit ADD COLUMN IF NOT EXISTS stamp_data_url TEXT;
+ALTER TABLE accounting_unit ADD COLUMN IF NOT EXISTS signature_data_url TEXT;
 
 CREATE TABLE IF NOT EXISTS app_user (
     id                  SERIAL PRIMARY KEY,
@@ -103,8 +117,10 @@ CREATE TABLE IF NOT EXISTS contact (
     address             TEXT,
     bank_account        TEXT,
     iban                TEXT,
+    email               TEXT,
     created_at          TEXT NOT NULL DEFAULT (now()::text)
 );
+ALTER TABLE contact ADD COLUMN IF NOT EXISTS email TEXT;
 
 CREATE TABLE IF NOT EXISTS project (
     id                  SERIAL PRIMARY KEY,

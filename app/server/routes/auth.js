@@ -12,7 +12,10 @@ function publicUser(user) {
 
 // POST /api/auth/register-company — založení nové firmy + první uživatel (jednatel/admin)
 router.post("/register-company", async (req, res) => {
-  const { company_name, ico, dic, full_name, email, password } = req.body;
+  const {
+    company_name, ico, dic, full_name, email, password,
+    company_address, company_email, company_phone, logo_data_url, stamp_data_url, signature_data_url,
+  } = req.body;
   if (!company_name || !ico || !full_name || !email || !password) {
     return res.status(400).json({ error: "Vyplňte název firmy, IČO, jméno, e-mail a heslo." });
   }
@@ -21,9 +24,13 @@ router.post("/register-company", async (req, res) => {
   try {
     const result = await store.transaction(async () => {
       await store.run(
-        `INSERT INTO accounting_unit (name, ico, dic, accounting_mode, unit_category, is_vat_payer, fiscal_year_start_month)
-         VALUES (?,?,?,?,?,?,?)`,
-        [company_name, ico, dic || null, "podvojne_ucetnictvi", "mikro", 0, 1]
+        `INSERT INTO accounting_unit
+          (name, ico, dic, accounting_mode, unit_category, is_vat_payer, fiscal_year_start_month,
+           address, email, phone, logo_data_url, stamp_data_url, signature_data_url)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [company_name, ico, dic || null, "podvojne_ucetnictvi", "mikro", 0, 1,
+         company_address || null, company_email || null, company_phone || null,
+         logo_data_url || null, stamp_data_url || null, signature_data_url || null]
       );
       const unitId = (await store.get("SELECT last_insert_rowid() AS id")).id;
       await insertAccounts(store, unitId);

@@ -28,6 +28,14 @@ CREATE TABLE IF NOT EXISTS accounting_unit (
     is_vat_payer        INTEGER NOT NULL DEFAULT 0,
     vat_payer_since     TEXT,
     fiscal_year_start_month INTEGER NOT NULL DEFAULT 1 CHECK (fiscal_year_start_month BETWEEN 1 AND 12),
+    iban                TEXT,
+    bank_account        TEXT,
+    address             TEXT,
+    email               TEXT,
+    phone               TEXT,
+    logo_data_url       TEXT,
+    stamp_data_url      TEXT,
+    signature_data_url  TEXT,
     created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -117,6 +125,8 @@ CREATE TABLE IF NOT EXISTS contact (
     is_vat_payer        INTEGER NOT NULL DEFAULT 0,
     address             TEXT,
     bank_account        TEXT,
+    iban                TEXT,
+    email               TEXT,
     created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

@@ -72,7 +72,10 @@ router.get("/units", async (req, res) => {
 
 // PATCH /api/units/:id — přepínač "Plátce DPH: ano/ne" apod. (kap. 3.2 brief)
 router.patch("/units/:id", async (req, res) => {
-  const { is_vat_payer, vat_payer_since, accounting_mode, name, dic, unit_category, iban, bank_account } = req.body;
+  const {
+    is_vat_payer, vat_payer_since, accounting_mode, name, dic, unit_category, iban, bank_account,
+    address, email, phone, logo_data_url, stamp_data_url, signature_data_url,
+  } = req.body;
   try {
     if (Number(req.params.id) !== req.user.accountingUnitId) return res.status(403).json({ error: "Nemáte oprávnění upravovat jinou firmu." });
     const before = await store.get("SELECT * FROM accounting_unit WHERE id = ?", [req.params.id]);
@@ -87,11 +90,18 @@ router.patch("/units/:id", async (req, res) => {
         dic = COALESCE(?, dic),
         unit_category = COALESCE(?, unit_category),
         iban = COALESCE(?, iban),
-        bank_account = COALESCE(?, bank_account)
+        bank_account = COALESCE(?, bank_account),
+        address = COALESCE(?, address),
+        email = COALESCE(?, email),
+        phone = COALESCE(?, phone),
+        logo_data_url = COALESCE(?, logo_data_url),
+        stamp_data_url = COALESCE(?, stamp_data_url),
+        signature_data_url = COALESCE(?, signature_data_url)
        WHERE id = ?`,
       [is_vat_payer === undefined ? null : (is_vat_payer ? 1 : 0), vat_payer_since || null,
        accounting_mode || null, name || null, dic || null, unit_category || null,
-       iban || null, bank_account || null, req.params.id]
+       iban || null, bank_account || null, address || null, email || null, phone || null,
+       logo_data_url || null, stamp_data_url || null, signature_data_url || null, req.params.id]
     );
     store.persist();
     await writeAuditLog({ unitId: req.params.id, action: "UPDATE", table: "accounting_unit", entityId: req.params.id, before, after: req.body });

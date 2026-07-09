@@ -32,4 +32,11 @@ async function generate(opts) {
   return { spayd, svg };
 }
 
-module.exports = { buildSpayd, generate };
+// PNG buffer (raster) — pro vkládání do PDF (pdfkit neumí SVG přímo).
+async function generatePng(opts) {
+  const spayd = buildSpayd(opts);
+  const png = await QRCode.toBuffer(spayd, { type: "png", margin: 1, width: 220 });
+  return { spayd, png };
+}
+
+module.exports = { buildSpayd, generate, generatePng };

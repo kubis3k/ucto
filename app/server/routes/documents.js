@@ -6,6 +6,8 @@ const store = require("../db");
 const { generateDocumentNumber, nextPostingNumber, writeAuditLog, assertPeriodOpen } = require("../lib/core");
 const qrplatba = require("../lib/qrplatba");
 const invoiceScan = require("../lib/invoiceScan");
+const { buildInvoicePdf } = require("../lib/invoicePdf");
+const mailer = require("../lib/mailer");
 const router = express.Router();
 
 const ALLOWED_MIME_TYPES = new Set(["application/pdf", "text/csv", "application/vnd.ms-excel", "image/png", "image/jpeg"]);
@@ -224,6 +226,53 @@ router.get("/:id/qr", async (req, res) => {
     res.json({ spayd, svg });
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// Načte podklady pro PDF vydané faktury a ověří, že doklad patří
+// přihlášené firmě (accounting_unit_id se řídí middleware v index.js).
+async function loadInvoicePdfInputs(req) {
+  const doc = await store.get("SELECT * FROM document WHERE id = ?", [req.params.id]);
+  if (!doc) throw Object.assign(new Error("Doklad nenalezen"), { status: 404 });
+  if (doc.doc_type !== "faktura_vydana") throw Object.assign(new Error("Vizuál PDF je k dispozici jen pro vydané faktury."), { status: 400 });
+  const [lines, unit, contact] = await Promise.all([
+    store.all("SELECT * FROM document_line WHERE document_id = ? ORDER BY line_no", [doc.id]),
+    store.get("SELECT * FROM accounting_unit WHERE id = ?", [doc.accounting_unit_id]),
+    doc.contact_id ? store.get("SELECT * FROM contact WHERE id = ?", [doc.contact_id]) : null,
+  ]);
+  return { doc, lines, unit, contact };
+}
+
+// GET /api/documents/:id/pdf — vizuál vydané faktury ke stažení/náhledu.
+router.get("/:id/pdf", async (req, res) => {
+  try {
+    const { doc, lines, unit, contact } = await loadInvoicePdfInputs(req);
+    const pdfBuffer = await buildInvoicePdf({ doc, lines, unit, contact });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="faktura-${doc.doc_number}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
+  }
+});
+
+// POST /api/documents/:id/send-email — { to?, subject?, message? } — vygeneruje
+// PDF vydané faktury a odešle ho jako přílohu. Bez `to` se použije e-mail kontaktu.
+router.post("/:id/send-email", async (req, res) => {
+  try {
+    const { doc, lines, unit, contact } = await loadInvoicePdfInputs(req);
+    const to = req.body.to || contact?.email;
+    if (!to) return res.status(400).json({ error: "Chybí e-mail adresáta — doplňte ho u kontaktu nebo zadejte přímo." });
+
+    const pdfBuffer = await buildInvoicePdf({ doc, lines, unit, contact });
+    const subject = req.body.subject || `Faktura č. ${doc.doc_number} — ${unit.name}`;
+    const text = req.body.message || `Dobrý den,\n\nv příloze zasíláme fakturu č. ${doc.doc_number} na částku ${Number(doc.total_amount).toLocaleString("cs-CZ")} Kč se splatností ${doc.due_date || "—"}.\n\nS pozdravem,\n${unit.name}`;
+    await mailer.sendInvoiceEmail({ to, subject, text, pdfBuffer, fileName: `faktura-${doc.doc_number}.pdf` });
+
+    await writeAuditLog({ unitId: doc.accounting_unit_id, userId: req.user.id, action: "SEND_EMAIL", table: "document", entityId: doc.id, after: { to } });
+    res.json({ ok: true, to });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message });
   }
 });
 

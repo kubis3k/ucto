@@ -22,12 +22,12 @@ router.get("/:id", async (req, res) => {
 });
 
 router.post("/", async (req, res) => {
-  const { accounting_unit_id, name, contact_type, ico, dic, is_vat_payer, address, bank_account, iban } = req.body;
+  const { accounting_unit_id, name, contact_type, ico, dic, is_vat_payer, address, bank_account, iban, email } = req.body;
   try {
     await store.run(
-      `INSERT INTO contact (accounting_unit_id, name, contact_type, ico, dic, is_vat_payer, address, bank_account, iban)
-       VALUES (?,?,?,?,?,?,?,?,?)`,
-      [accounting_unit_id, name, contact_type, ico || null, dic || null, is_vat_payer ? 1 : 0, address || null, bank_account || null, iban || null]
+      `INSERT INTO contact (accounting_unit_id, name, contact_type, ico, dic, is_vat_payer, address, bank_account, iban, email)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [accounting_unit_id, name, contact_type, ico || null, dic || null, is_vat_payer ? 1 : 0, address || null, bank_account || null, iban || null, email || null]
     );
     const id = (await store.get("SELECT last_insert_rowid() AS id")).id;
     store.persist();
@@ -36,15 +36,15 @@ router.post("/", async (req, res) => {
 });
 
 router.put("/:id", async (req, res) => {
-  const { name, contact_type, ico, dic, is_vat_payer, address, bank_account } = req.body;
+  const { name, contact_type, ico, dic, is_vat_payer, address, bank_account, email } = req.body;
   try {
     const existing = await store.get("SELECT * FROM contact WHERE id = ?", [req.params.id]);
     if (!existing) return res.status(404).json({ error: "Kontakt nenalezen" });
     await store.run(
-      `UPDATE contact SET name=?, contact_type=?, ico=?, dic=?, is_vat_payer=?, address=?, bank_account=? WHERE id=?`,
+      `UPDATE contact SET name=?, contact_type=?, ico=?, dic=?, is_vat_payer=?, address=?, bank_account=?, email=? WHERE id=?`,
       [name ?? existing.name, contact_type ?? existing.contact_type, ico ?? existing.ico, dic ?? existing.dic,
        is_vat_payer === undefined ? existing.is_vat_payer : (is_vat_payer ? 1 : 0),
-       address ?? existing.address, bank_account ?? existing.bank_account, req.params.id]
+       address ?? existing.address, bank_account ?? existing.bank_account, email ?? existing.email, req.params.id]
     );
     store.persist();
     res.json(await store.get("SELECT * FROM contact WHERE id = ?", [req.params.id]));

@@ -149,6 +149,46 @@ function passwordField(name, attrs = "") {
   </div>`;
 }
 
+// Sdílená sekce pro logo/razítko/podpis + sídlo firmy — použita jak při
+// registraci firmy, tak v Nastavení (existující firmy). Soubory se
+// odesílají jako data URL v JSON body (žádný multipart) — malé obrázky,
+// zjednodušuje to server i frontend.
+function brandingFieldsHtml(prefill = {}) {
+  return `
+    <label style="margin-top:12px">Adresa / sídlo firmy</label><input type="text" name="${prefill.addressField || "company_address"}" value="${esc(prefill.address || "")}" />
+    <div class="form-grid">
+      <div><label>Kontaktní e-mail (na faktuře)</label><input type="email" name="${prefill.emailField || "company_email"}" value="${esc(prefill.email || "")}" /></div>
+      <div><label>Telefon</label><input type="text" name="${prefill.phoneField || "company_phone"}" value="${esc(prefill.phone || "")}" /></div>
+    </div>
+    <div class="form-grid">
+      <div><label>Logo</label><input type="file" name="logo_file" accept="image/png,image/jpeg,image/svg+xml" /></div>
+      <div><label>Razítko</label><input type="file" name="stamp_file" accept="image/png,image/jpeg" /></div>
+      <div><label>Podpis</label><input type="file" name="signature_file" accept="image/png,image/jpeg" /></div>
+    </div>
+    <p class="auth-hint" style="margin-top:4px">Nepovinné — použijí se na vizuálu vydaných faktur (PDF). Loga/razítka/podpisy zůstávají uložené, dokud nenahradíte novým souborem.</p>`;
+}
+
+// Přečte vybrané soubory z <input type="file"> polí (logo_file/stamp_file/
+// signature_file) ve formuláři a vrátí { logo_data_url?, stamp_data_url?,
+// signature_data_url? } — jen za pole, kde byl skutečně vybrán soubor.
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Soubor se nepodařilo načíst."));
+    reader.readAsDataURL(file);
+  });
+}
+async function readBrandingFiles(form) {
+  const map = { logo_file: "logo_data_url", stamp_file: "stamp_data_url", signature_file: "signature_data_url" };
+  const out = {};
+  for (const [inputName, field] of Object.entries(map)) {
+    const input = form.querySelector(`[name="${inputName}"]`);
+    if (input?.files?.[0]) out[field] = await readFileAsDataUrl(input.files[0]);
+  }
+  return out;
+}
+
 function renderAuthScreen() {
   const screen = document.getElementById("authScreen");
   screen.classList.remove("hidden");
@@ -241,6 +281,7 @@ function renderAuthTabBody() {
         <label>Vaše jméno</label><input type="text" name="full_name" required />
         <label>E-mail</label><input type="email" name="email" autocomplete="email" required />
         <label>Heslo (min. 8 znaků)</label>${passwordField("password", 'autocomplete="new-password" minlength="8" required')}
+        ${brandingFieldsHtml()}
         <div class="form-actions"><button type="submit">Založit firmu</button></div>
       </form>
       <div id="authError" class="auth-error"></div>
@@ -282,7 +323,9 @@ async function handleAuthSetPassword(form) {
 
 async function handleAuthRegisterCompany(form) {
   const body = Object.fromEntries(new FormData(form).entries());
+  delete body.logo_file; delete body.stamp_file; delete body.signature_file;
   try {
+    Object.assign(body, await readBrandingFiles(form));
     const { token } = await api("POST", "/auth/register-company", body);
     setAuthToken(token);
     checkAuthAndStart();
@@ -810,6 +853,15 @@ async function showDocumentDetail(id) {
         <div id="qrTarget"><button class="secondary small" data-action="load-qr" data-id="${doc.id}">Zobrazit QR platbu</button></div>
       </div>
     </div>
+    ${doc.doc_type === "faktura_vydana" ? `
+    <div style="margin-top:18px">
+      <div class="text-dim" style="font-size:12px;margin-bottom:6px">Vizuál faktury</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="secondary small" data-action="download-invoice-pdf" data-id="${doc.id}" data-doc-number="${esc(doc.doc_number)}">Stáhnout PDF</button>
+        <button class="secondary small" data-action="open-send-invoice" data-id="${doc.id}">Odeslat e-mailem</button>
+      </div>
+      <div id="sendInvoiceBox"></div>
+    </div>` : ""}
     <div style="margin-top:18px">
       <div class="text-dim" style="font-size:12px;margin-bottom:6px">Přílohy (PDF, CSV)</div>
       <form data-form="upload-attachment" data-doc-id="${doc.id}" style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
@@ -824,6 +876,45 @@ async function showDocumentDetail(id) {
     </div>
   `);
   loadDocumentAttachments(doc.id);
+}
+
+// Stáhne PDF vizuál vydané faktury přes autentizovaný fetch (plain <a href>
+// by neposlal Authorization header) a otevře ho jako blob URL v novém tabu.
+async function downloadInvoicePdf(id, docNumber) {
+  try {
+    const headers = {};
+    const token = authToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${API}/documents/${id}/pdf`, { headers });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || res.statusText); }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `faktura-${docNumber}.pdf`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (err) { toast(err.message, "error"); }
+}
+
+function openSendInvoiceForm(id) {
+  const box = document.getElementById("sendInvoiceBox");
+  if (!box) return;
+  box.innerHTML = `
+    <form data-form="send-invoice-email" data-id="${id}" style="margin-top:10px">
+      <label>E-mail adresáta (nepovinné — bez vyplnění se použije e-mail kontaktu)</label>
+      <input type="email" name="to" placeholder="odberatel@example.com" />
+      <div class="form-actions"><button type="submit" class="secondary small">Odeslat</button></div>
+    </form>`;
+}
+
+async function handleSendInvoiceEmail(form) {
+  const id = form.dataset.id;
+  const { to } = Object.fromEntries(new FormData(form).entries());
+  try {
+    const result = await api("POST", `/documents/${id}/send-email`, to ? { to } : {});
+    toast(`Faktura odeslána na ${result.to}.`);
+    document.getElementById("sendInvoiceBox").innerHTML = "";
+  } catch (err) { toast(err.message, "error"); }
 }
 
 async function loadDocumentAttachments(docId) {
@@ -1232,6 +1323,7 @@ function contactFormModal(prefill = {}) {
         <div><label>IBAN (pro QR platbu)</label><input type="text" name="iban" placeholder="CZ..." /></div>
       </div>
       <label>Adresa</label><input type="text" name="address" value="${esc(prefill.address || "")}" />
+      <label>E-mail (výchozí adresát při odeslání faktury)</label><input type="email" name="email" value="${esc(prefill.email || "")}" />
       <label style="margin-top:12px"><input type="checkbox" name="is_vat_payer" ${prefill.is_vat_payer ? "checked" : ""} style="width:auto;display:inline-block;margin-right:6px" /> Plátce DPH</label>
       <div class="form-actions">
         <button type="submit">Vytvořit</button>
@@ -1967,6 +2059,12 @@ async function renderSettings() {
         </div>
         <div><label>IBAN (pro QR platbu na vydaných fakturách)</label><input type="text" name="iban" value="${esc(STATE.unit.iban || "")}" placeholder="CZ..." /></div>
         <div><label>Číslo účtu</label><input type="text" name="bank_account" value="${esc(STATE.unit.bank_account || "")}" placeholder="123456789/0100" /></div>
+        <div><label>Adresa / sídlo firmy (na faktuře)</label><input type="text" name="address" value="${esc(STATE.unit.address || "")}" /></div>
+        <div><label>Kontaktní e-mail (na faktuře)</label><input type="email" name="email" value="${esc(STATE.unit.email || "")}" /></div>
+        <div><label>Telefon (na faktuře)</label><input type="text" name="phone" value="${esc(STATE.unit.phone || "")}" /></div>
+        <div><label>Logo${STATE.unit.logo_data_url ? " (nahrané — vyberte nový soubor pro nahrazení)" : ""}</label><input type="file" name="logo_file" accept="image/png,image/jpeg,image/svg+xml" /></div>
+        <div><label>Razítko${STATE.unit.stamp_data_url ? " (nahrané)" : ""}</label><input type="file" name="stamp_file" accept="image/png,image/jpeg" /></div>
+        <div><label>Podpis${STATE.unit.signature_data_url ? " (nahraný)" : ""}</label><input type="file" name="signature_file" accept="image/png,image/jpeg" /></div>
         <div style="grid-column:1/-1"><button type="submit">Uložit</button></div>
       </form>
     </div>
@@ -1999,7 +2097,10 @@ async function renderSettings() {
 
 async function handleUpdateUnit(form) {
   const fd = new FormData(form);
-  await api("PATCH", `/units/${STATE.unit.id}`, Object.fromEntries(fd.entries()));
+  const body = Object.fromEntries(fd.entries());
+  delete body.logo_file; delete body.stamp_file; delete body.signature_file;
+  Object.assign(body, await readBrandingFiles(form));
+  await api("PATCH", `/units/${STATE.unit.id}`, body);
   const units = await api("GET", "/units");
   STATE.unit = units.find((u) => u.id === STATE.unit.id);
   toast("Nastavení bylo uloženo.");
@@ -2184,6 +2285,8 @@ document.addEventListener("click", async (e) => {
       case "ares-pick": await aresPickAndOpen(e.target.closest("[data-ico]").dataset.ico); break;
       case "doc-detail": await showDocumentDetail(id); break;
       case "load-qr": await loadDocumentQr(id); break;
+      case "download-invoice-pdf": await downloadInvoicePdf(id, e.target.closest("[data-doc-number]").dataset.docNumber); break;
+      case "open-send-invoice": openSendInvoiceForm(id); break;
       case "delete-template": {
         if (!confirm("Smazat předkontaci?")) break;
         await api("DELETE", `/templates/${id}`); toast("Předkontace smazána."); renderTemplates(); break;
@@ -2253,6 +2356,7 @@ document.addEventListener("submit", async (e) => {
       case "update-unit": await handleUpdateUnit(e.target); break;
       case "add-user": await handleAddUser(e.target); break;
       case "upload-attachment": await handleUploadAttachment(e.target); break;
+      case "send-invoice-email": await handleSendInvoiceEmail(e.target); break;
       case "auth-login": await handleAuthLogin(e.target); break;
       case "auth-set-password": await handleAuthSetPassword(e.target); break;
       case "auth-register-company": await handleAuthRegisterCompany(e.target); break;
