@@ -69,4 +69,18 @@ function requireAuth(req, res, next) {
   }
 }
 
-module.exports = { hashPassword, verifyPassword, signSession, requireAuth };
+// "state" pro OIDC (BankID) redirect flow — místo server-side session úložiště
+// (nevhodné pro serverless) se do state zakóduje podepsaný JWT s krátkou
+// platností nesoucí accounting_unit_id, ke kterému se přihlašování vztahuje.
+// typ: "bankid_state" odlišuje tento token od běžné přihlašovací session.
+function signState(payload) {
+  return jwt.sign({ ...payload, typ: "bankid_state" }, getJwtSecret(), { expiresIn: "10m" });
+}
+
+function verifyState(token) {
+  const payload = jwt.verify(token, getJwtSecret());
+  if (payload.typ !== "bankid_state") throw new Error("Neplatný typ state tokenu.");
+  return payload;
+}
+
+module.exports = { hashPassword, verifyPassword, signSession, signState, verifyState, requireAuth };

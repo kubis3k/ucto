@@ -2,7 +2,8 @@ const express = require("express");
 const crypto = require("crypto");
 const store = require("../db");
 const { insertAccounts } = require("../lib/chartOfAccountsSeed");
-const { hashPassword, verifyPassword, signSession, requireAuth } = require("../lib/auth");
+const { hashPassword, verifyPassword, signSession, signState, verifyState, requireAuth } = require("../lib/auth");
+const bankidOidc = require("../lib/bankidOidc");
 const router = express.Router();
 
 function publicUser(user) {
@@ -133,12 +134,43 @@ router.post("/accept-invite", async (req, res) => {
 
 // ---------------------------------------------------------------------
 // BankID ověření jednatele — feature-flag BANKID_MODE=mock|live (env).
-// V "mock" režimu (výchozí, dokud nejsou k dispozici produkční
-// client_id/secret z bankid.cz) se místo reálného OAuth přesměrování
-// vrátí přímo seznam jednatelů firmy — frontend nabídne jejich výběr.
-// V "live" režimu je zde jen kostra pro budoucí napojení.
+// V "mock" režimu se místo reálného OAuth přesměrování vrátí přímo
+// seznam jednatelů firmy — frontend nabídne jejich výběr. V "live" režimu
+// (BANKID_CLIENT_ID/SECRET/REDIRECT_URI nastavené) se přesměruje na
+// skutečný BankID OIDC flow — viz lib/bankidOidc.js a handleBankidOidcCallback
+// níže (ta se mountuje na kořenovou cestu "/", protože přesně tak byl u
+// BankID zaregistrovaný redirect_uri).
 // ---------------------------------------------------------------------
 const BANKID_MODE = process.env.BANKID_MODE || "mock";
+
+// Sdílená logika ověření jména jednatele + vytvoření/aktualizace uživatele —
+// používá jak mock JSON callback, tak reálný OIDC redirect callback.
+async function verifyAndUpsertBankidUser({ accounting_unit_id, full_name, email }) {
+  const unit = await store.get("SELECT id FROM accounting_unit WHERE id = ?", [accounting_unit_id]);
+  if (!unit) throw Object.assign(new Error("Firma nenalezena."), { status: 404 });
+
+  const directors = (await store.all("SELECT full_name FROM company_director WHERE accounting_unit_id = ?", [accounting_unit_id]))
+    .map((d) => d.full_name.trim().toLowerCase());
+  if (!directors.includes(String(full_name || "").trim().toLowerCase())) {
+    throw Object.assign(new Error("Nejste evidovaný jednatel této firmy."), { status: 403 });
+  }
+
+  let user = await store.get("SELECT * FROM app_user WHERE accounting_unit_id = ? AND full_name = ?", [accounting_unit_id, full_name]);
+  if (!user) {
+    if (!email) throw Object.assign(new Error("Pro první přihlášení přes BankID je potřeba e-mail z profilu."), { status: 400 });
+    await store.run(
+      `INSERT INTO app_user (accounting_unit_id, full_name, email, role, bankid_verified) VALUES (?,?,?,?,1)`,
+      [accounting_unit_id, full_name, email, "admin"]
+    );
+    const userId = (await store.get("SELECT last_insert_rowid() AS id")).id;
+    user = await store.get("SELECT * FROM app_user WHERE id = ?", [userId]);
+  } else if (!user.bankid_verified) {
+    await store.run("UPDATE app_user SET bankid_verified = 1 WHERE id = ?", [user.id]);
+    user = await store.get("SELECT * FROM app_user WHERE id = ?", [user.id]);
+  }
+  store.persist();
+  return user;
+}
 
 // POST /api/auth/bankid/start — { ico }
 router.post("/bankid/start", async (req, res) => {
@@ -147,48 +179,56 @@ router.post("/bankid/start", async (req, res) => {
   if (!unit) return res.status(404).json({ error: "Firma s tímto IČO není v systému zaregistrována." });
 
   if (BANKID_MODE === "live") {
-    if (!process.env.BANKID_CLIENT_ID) return res.status(501).json({ error: "BankID (live) není nakonfigurováno — chybí BANKID_CLIENT_ID." });
-    // TODO až budou k dispozici produkční přihlašovací údaje: postavit reálnou
-    // OAuth authorize URL (https://bankid.cz/…/authorize) a vrátit {redirect: url}.
-    return res.status(501).json({ error: "BankID (live) OAuth flow zatím není implementován." });
+    if (!process.env.BANKID_CLIENT_ID || !process.env.BANKID_REDIRECT_URI) {
+      return res.status(501).json({ error: "BankID (live) není nakonfigurováno — chybí BANKID_CLIENT_ID/BANKID_REDIRECT_URI." });
+    }
+    try {
+      const state = signState({ accountingUnitId: unit.id });
+      const redirect = await bankidOidc.buildAuthorizeUrl({ state });
+      return res.json({ mode: "live", redirect });
+    } catch (err) {
+      return res.status(502).json({ error: "Nepodařilo se sestavit BankID přihlášení: " + err.message });
+    }
   }
 
   const directors = (await store.all("SELECT full_name FROM company_director WHERE accounting_unit_id = ?", [unit.id])).map((d) => d.full_name);
   res.json({ mode: "mock", accounting_unit_id: unit.id, company_name: unit.name, directors });
 });
 
-// POST /api/auth/bankid/callback — { accounting_unit_id, full_name, email? }
+// POST /api/auth/bankid/callback (mock) — { accounting_unit_id, full_name, email? }
 router.post("/bankid/callback", async (req, res) => {
-  const { accounting_unit_id, full_name, email } = req.body;
   try {
-    const unit = await store.get("SELECT id FROM accounting_unit WHERE id = ?", [accounting_unit_id]);
-    if (!unit) return res.status(404).json({ error: "Firma nenalezena." });
-
-    const directors = (await store.all("SELECT full_name FROM company_director WHERE accounting_unit_id = ?", [accounting_unit_id]))
-      .map((d) => d.full_name.trim().toLowerCase());
-    if (!directors.includes(String(full_name || "").trim().toLowerCase())) {
-      return res.status(403).json({ error: "Nejste evidovaný jednatel této firmy." });
-    }
-
-    let user = await store.get("SELECT * FROM app_user WHERE accounting_unit_id = ? AND full_name = ?", [accounting_unit_id, full_name]);
-    if (!user) {
-      if (!email) return res.status(400).json({ error: "Pro první přihlášení přes BankID zadejte e-mail." });
-      await store.run(
-        `INSERT INTO app_user (accounting_unit_id, full_name, email, role, bankid_verified) VALUES (?,?,?,?,1)`,
-        [accounting_unit_id, full_name, email, "admin"]
-      );
-      const userId = (await store.get("SELECT last_insert_rowid() AS id")).id;
-      user = await store.get("SELECT * FROM app_user WHERE id = ?", [userId]);
-    } else if (!user.bankid_verified) {
-      await store.run("UPDATE app_user SET bankid_verified = 1 WHERE id = ?", [user.id]);
-      user = await store.get("SELECT * FROM app_user WHERE id = ?", [user.id]);
-    }
-    store.persist();
+    const user = await verifyAndUpsertBankidUser(req.body);
     res.json({ user: publicUser(user), token: signSession(user) });
   } catch (err) {
     if (String(err.message).includes("UNIQUE")) return res.status(409).json({ error: "Uživatel s tímto e-mailem už existuje pod jiným jménem." });
-    res.status(400).json({ error: err.message });
+    res.status(err.status || 400).json({ error: err.message });
   }
 });
 
+// GET / (jen když ?code nebo ?error je v query — viz vercel.json a index.js) —
+// reálný OIDC redirect callback z BankID. redirect_uri je zaregistrovaný jako
+// kořen domény, ne /api/auth/..., proto se to mountuje jinde (index.js), ale
+// logika žije tady vedle zbytku BankID kódu.
+async function handleBankidOidcCallback(req, res) {
+  const redirectWithError = (message) => res.redirect(`/#bankid-error=${encodeURIComponent(message)}`);
+
+  if (req.query.error) {
+    return redirectWithError(req.query.error_description || req.query.error);
+  }
+  try {
+    const { accountingUnitId } = verifyState(req.query.state);
+    const tokens = await bankidOidc.exchangeCodeForToken(req.query.code);
+    const profile = await bankidOidc.fetchUserInfo(tokens.access_token);
+    const fullName = profile.name || `${profile.given_name || ""} ${profile.family_name || ""}`.trim();
+
+    const user = await verifyAndUpsertBankidUser({ accounting_unit_id: accountingUnitId, full_name: fullName, email: profile.email });
+    const token = signSession(user);
+    res.redirect(`/#bankid-login=${token}`);
+  } catch (err) {
+    redirectWithError(err.message);
+  }
+}
+
 module.exports = router;
+module.exports.handleBankidOidcCallback = handleBankidOidcCallback;

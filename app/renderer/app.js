@@ -171,6 +171,10 @@ async function handleAuthBankidStart(form) {
   errBox.textContent = "";
   try {
     const data = await api("POST", "/auth/bankid/start", { ico });
+    if (data.mode === "live") {
+      window.location.href = data.redirect; // celostránkový přesměrování na skutečné BankID přihlášení
+      return;
+    }
     document.getElementById("bankidStep2").innerHTML = `
       <form data-form="auth-bankid-callback" data-unit-id="${data.accounting_unit_id}">
         <label>Firma: ${esc(data.company_name)} — vyberte své jméno</label>
@@ -1997,6 +2001,22 @@ window.addEventListener("DOMContentLoaded", checkAuthAndStart);
 async function checkAuthAndStart() {
   const inviteMatch = location.hash.match(/^#accept-invite=(.+)$/);
   if (inviteMatch) return renderAcceptInviteScreen(inviteMatch[1]);
+
+  // Návrat z reálného BankID OIDC přihlášení (viz server/routes/auth.js handleBankidOidcCallback).
+  const bankidLoginMatch = location.hash.match(/^#bankid-login=(.+)$/);
+  if (bankidLoginMatch) {
+    setAuthToken(bankidLoginMatch[1]);
+    location.hash = "";
+  }
+  const bankidErrorMatch = location.hash.match(/^#bankid-error=(.+)$/);
+  if (bankidErrorMatch) {
+    location.hash = "";
+    AUTH_TAB = "bankid";
+    renderAuthScreen();
+    const errBox = document.getElementById("authError");
+    if (errBox) errBox.textContent = decodeURIComponent(bankidErrorMatch[1]);
+    return;
+  }
 
   let user;
   try {
