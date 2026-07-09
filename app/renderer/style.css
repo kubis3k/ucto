@@ -366,12 +366,40 @@ label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 
 .empty-state { color: var(--text-dim); text-align: center; padding: 44px 12px; font-size: 13px; }
 
 /* ---------------------------------------------------------------- Cashflow chart */
-.cashflow-chart-wrap { display: flex; flex-direction: column; gap: 10px; }
-.cashflow-chart { width: 100%; height: 180px; overflow: visible; }
+.cashflow-chart-wrap { display: flex; flex-direction: column; gap: 10px; position: relative; }
+.cashflow-chart { width: 100%; height: 180px; overflow: visible; cursor: crosshair; }
 .cashflow-chart .cashflow-label { font-size: 9px; fill: var(--text-faint); font-family: var(--font-ui); }
 .cashflow-legend { display: flex; gap: 18px; font-size: 12px; color: var(--text-dim); }
 .cashflow-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .cashflow-legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.cashflow-tooltip {
+  position: absolute; pointer-events: none; z-index: 10;
+  background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  padding: 8px 11px; font-size: 11.5px; display: none; flex-direction: column; gap: 3px;
+  box-shadow: var(--shadow-lg); white-space: nowrap;
+}
+.cashflow-tooltip.show { display: flex; }
+.cashflow-tooltip strong { color: var(--text); font-size: 11px; margin-bottom: 2px; }
+.cashflow-tooltip .in { color: var(--green); }
+.cashflow-tooltip .out { color: var(--red); }
+
+/* ---------------------------------------------------------------- KPI delta badge */
+.kpi-delta {
+  display: inline-block; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 10px;
+  margin-left: 6px; vertical-align: middle; letter-spacing: 0;
+}
+.kpi-delta.up { background: var(--green-soft); color: var(--green); }
+.kpi-delta.down { background: var(--red-soft); color: var(--red); }
+
+/* ---------------------------------------------------------------- Next actions panel */
+.next-actions { display: flex; flex-direction: column; gap: 6px; }
+.next-action-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 11px 13px; border-radius: var(--radius-sm); background: var(--surface-2);
+  color: var(--text); font-size: 13px; text-decoration: none; transition: background 0.15s ease;
+}
+.next-action-item:hover { background: var(--surface-3); }
+.next-action-item svg { width: 15px; height: 15px; color: var(--text-faint); flex-shrink: 0; }
 
 /* ---------------------------------------------------------------- Toast */
 .toast {

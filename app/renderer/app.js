@@ -611,6 +611,8 @@ async function renderDashboard() {
     api("GET", `/bank/cashflow?unit=${unit}`),
   ]);
   const overdue = pohledavky.filter((p) => p.dni_po_splatnosti > 0);
+  const m = cashflow.monthly || [];
+  const thisMonth = m[m.length - 1], lastMonth = m[m.length - 2];
 
   document.getElementById("view").innerHTML = `
     <div class="kpi-grid">
@@ -629,16 +631,28 @@ async function renderDashboard() {
         <div class="value">${overdue.length}</div>
         <div class="sub">z ${pohledavky.length} otevřených pohledávek/závazků</div>
       </div>
+      ${thisMonth ? `
       <div class="kpi">
-        <div class="label">Účetní jednotka</div>
-        <div class="value" style="font-size:16px">${esc(STATE.unit.name)}</div>
-        <div class="sub">${STATE.unit.unit_category} · ${STATE.unit.accounting_mode.replace("_"," ")}</div>
+        <div class="label">Příjmy tento měsíc ${kpiDelta(thisMonth.income, lastMonth?.income)}</div>
+        <div class="value">${fmtMoney(thisMonth.income)}</div>
+        <div class="sub">vs minulý měsíc</div>
       </div>
+      <div class="kpi">
+        <div class="label">Výdaje tento měsíc ${kpiDelta(thisMonth.expense, lastMonth?.expense)}</div>
+        <div class="value">${fmtMoney(thisMonth.expense)}</div>
+        <div class="sub">vs minulý měsíc</div>
+      </div>` : ""}
     </div>
 
-    <div class="panel">
-      <h2>Cashflow za 12 měsíců</h2>
-      ${renderCashflowChart(cashflow.monthly)}
+    <div class="two-col">
+      <div class="panel">
+        <h2>Cashflow za 12 měsíců</h2>
+        ${renderCashflowChart(cashflow.monthly)}
+      </div>
+      <div class="panel">
+        <h2>Co udělat dál</h2>
+        ${renderNextActions({ docs, overdue })}
+      </div>
     </div>
 
     <div class="two-col">
@@ -665,42 +679,95 @@ async function renderDashboard() {
   `;
 }
 
+// Malý badge s % změnou proti minulému měsíci (barva jen podle znaménka,
+// ne podle "dobré/špatné" — stejně neutrálně jako v referenčním UI kitu).
+function kpiDelta(curr, prev) {
+  if (!prev) return "";
+  const pct = ((curr - prev) / prev) * 100;
+  if (!Number.isFinite(pct)) return "";
+  const up = pct >= 0;
+  return `<span class="kpi-delta ${up ? "up" : "down"}">${up ? "+" : ""}${pct.toFixed(0)}%</span>`;
+}
+
+// Onboarding/akční panel — co reálně čeká na uživatele, spočteno z už
+// natažených dat (žádné nové API volání). Prázdné jen když není co řešit.
+function renderNextActions({ docs, overdue }) {
+  const items = [];
+  if (docs.length) items.push({ text: `Schválit a zaúčtovat ${docs.length} ${docs.length === 1 ? "doklad" : "doklady"} v konceptu`, hash: "#documents" });
+  if (overdue.length) items.push({ text: `${overdue.length} ${overdue.length === 1 ? "faktura je" : "faktury/faktur jsou"} po splatnosti — zkontrolovat úhrady`, hash: "#bank" });
+  if (!STATE.unit.iban) items.push({ text: "Doplnit IBAN — potřeba pro QR platbu na vydaných fakturách", hash: "#settings" });
+  if (!STATE.unit.logo_data_url) items.push({ text: "Nahrát logo firmy — zobrazí se na vydaných fakturách", hash: "#settings" });
+  if (!items.length) return `<div class="empty-state">Nic k řešení — vše je v pořádku.</div>`;
+  return `<div class="next-actions">${items.map((it) => `
+    <a href="${it.hash}" class="next-action-item">
+      <span>${esc(it.text)}</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+    </a>`).join("")}</div>`;
+}
+
 const MONTH_ABBR = ["led", "úno", "bře", "dub", "kvě", "čvn", "čvc", "srp", "zář", "říj", "lis", "pro"];
-// Jednoduchý sloupcový graf příjmů/výdajů (čisté SVG, žádná knihovna) — příjmy
-// zelené, výdaje červené, dva sloupce vedle sebe na měsíc, škálováno na max.
+// Liniový graf příjmů/výdajů s hover tooltipem (čisté SVG + malý JS, žádná
+// knihovna) — inspirováno referenčním accounting UI kitem (Marvilo, Figma
+// Community), ale na naší barevné paletě (zelená/červená sémantika, ne
+// jednotná fialová) a bez copy-paste jeho layoutu.
 function renderCashflowChart(monthly) {
   if (!monthly || !monthly.length) return `<div class="empty-state">Žádná bankovní data.</div>`;
   const max = Math.max(1, ...monthly.flatMap((m) => [m.income, m.expense]));
-  const groupW = 56, barW = 16, gap = 4, chartH = 140, labelH = 24;
-  const totalW = monthly.length * groupW;
-  const bars = monthly.map((m, i) => {
-    const x = i * groupW + (groupW - (barW * 2 + gap)) / 2;
-    const hIncome = (m.income / max) * chartH;
-    const hExpense = (m.expense / max) * chartH;
+  const chartW = 560, chartH = 160, padX = 8, labelH = 24;
+  const n = monthly.length;
+  const stepX = (chartW - padX * 2) / Math.max(1, n - 1);
+  const xAt = (i) => padX + i * stepX;
+  const yAt = (v) => chartH - (v / max) * (chartH - 10);
+
+  const pathFor = (key) => monthly.map((m, i) => `${i === 0 ? "M" : "L"} ${xAt(i).toFixed(1)} ${yAt(m[key]).toFixed(1)}`).join(" ");
+  const dotsFor = (key, color) => monthly.map((m, i) => `<circle cx="${xAt(i).toFixed(1)}" cy="${yAt(m[key]).toFixed(1)}" r="3" fill="${color}" />`).join("");
+
+  const labels = monthly.map((m, i) => {
+    const [yy, mm] = m.month.split("-");
+    return `<text x="${xAt(i).toFixed(1)}" y="${chartH + 16}" text-anchor="middle" class="cashflow-label">${MONTH_ABBR[Number(mm) - 1]} ${yy.slice(2)}</text>`;
+  }).join("");
+
+  // Neviditelné sloupce přes celou výšku grafu pro hover — každý zná svůj
+  // měsíc a hodnoty, na mousemove zavolá globální showCashflowTip().
+  const hoverZones = monthly.map((m, i) => {
     const [yy, mm] = m.month.split("-");
     const label = `${MONTH_ABBR[Number(mm) - 1]} ${yy.slice(2)}`;
-    return `
-      <g>
-        <rect x="${x}" y="${chartH - hIncome}" width="${barW}" height="${hIncome}" rx="3" fill="var(--green)">
-          <title>Příjmy ${label}: ${fmtMoney(m.income)}</title>
-        </rect>
-        <rect x="${x + barW + gap}" y="${chartH - hExpense}" width="${barW}" height="${hExpense}" rx="3" fill="var(--red)">
-          <title>Výdaje ${label}: ${fmtMoney(m.expense)}</title>
-        </rect>
-        <text x="${x + barW + gap / 2}" y="${chartH + 16}" text-anchor="middle" class="cashflow-label">${esc(label)}</text>
-      </g>`;
+    const zoneX = i === 0 ? 0 : xAt(i) - stepX / 2;
+    const zoneW = i === 0 || i === n - 1 ? stepX / 2 + padX : stepX;
+    return `<rect x="${zoneX.toFixed(1)}" y="0" width="${zoneW.toFixed(1)}" height="${chartH}" fill="transparent"
+      onmousemove="showCashflowTip(event, '${esc(label)}', ${m.income}, ${m.expense})" onmouseleave="hideCashflowTip()" />`;
   }).join("");
+
   return `
     <div class="cashflow-chart-wrap">
-      <svg viewBox="0 0 ${totalW} ${chartH + labelH}" class="cashflow-chart" preserveAspectRatio="none">
-        <line x1="0" y1="${chartH}" x2="${totalW}" y2="${chartH}" stroke="var(--border)" stroke-width="1" />
-        ${bars}
+      <svg viewBox="0 0 ${chartW} ${chartH + labelH}" class="cashflow-chart" preserveAspectRatio="none">
+        <line x1="0" y1="${chartH}" x2="${chartW}" y2="${chartH}" stroke="var(--border)" stroke-width="1" />
+        <path d="${pathFor("income")}" fill="none" stroke="var(--green)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
+        <path d="${pathFor("expense")}" fill="none" stroke="var(--red)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
+        ${dotsFor("income", "var(--green)")}
+        ${dotsFor("expense", "var(--red)")}
+        ${labels}
+        ${hoverZones}
       </svg>
+      <div class="cashflow-tooltip" id="cashflowTip"></div>
       <div class="cashflow-legend">
         <span><i style="background:var(--green)"></i>Příjmy</span>
         <span><i style="background:var(--red)"></i>Výdaje</span>
       </div>
     </div>`;
+}
+function showCashflowTip(evt, label, income, expense) {
+  const tip = document.getElementById("cashflowTip");
+  if (!tip) return;
+  const wrap = tip.closest(".cashflow-chart-wrap");
+  const wrapRect = wrap.getBoundingClientRect();
+  tip.innerHTML = `<strong>${esc(label)}</strong><span class="in">Příjmy: ${fmtMoney(income)}</span><span class="out">Výdaje: ${fmtMoney(expense)}</span>`;
+  tip.style.left = `${evt.clientX - wrapRect.left + 14}px`;
+  tip.style.top = `${evt.clientY - wrapRect.top - 10}px`;
+  tip.classList.add("show");
+}
+function hideCashflowTip() {
+  document.getElementById("cashflowTip")?.classList.remove("show");
 }
 
 function tableOrEmpty(rows, columns) {
