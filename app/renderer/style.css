@@ -672,3 +672,47 @@ label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 
   .view { padding: 16px 16px calc(84px + env(safe-area-inset-bottom, 0px)); }
   .kpi-grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* ---------------------------------------------------------------- Balance hero (mobil, dashboard) */
+.balance-hero { display: none; }
+@media (max-width: 820px) {
+  .balance-hero {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+    background: linear-gradient(160deg, var(--surface-2), var(--surface));
+    border: 1px solid var(--border); border-radius: 16px; padding: 18px 20px; margin-bottom: 16px;
+  }
+  .balance-hero-label { font-size: 12px; color: var(--text-dim); font-weight: 600; }
+  .balance-hero-value { font-size: 30px; font-weight: 700; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+  .balance-hero-toggle {
+    background: transparent; border: 1px solid var(--border-strong); color: var(--text-dim);
+    border-radius: 2222px; padding: 5px 14px; font-size: 12px; font-weight: 600; font-family: inherit;
+  }
+}
+
+/* ---------------------------------------------------------------- Section header (nadpis + pill) */
+.section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; }
+.section-header h2 { margin: 0; }
+.section-header-pill {
+  display: none; font-size: 11px; font-weight: 600; color: var(--text-dim);
+  border: 1px solid var(--border-strong); border-radius: 2222px; padding: 5px 12px; white-space: nowrap;
+}
+@media (max-width: 820px) { .section-header-pill { display: inline-block; } }
+
+/* ---------------------------------------------------------------- Favourite rows (mobil, seznamy) */
+.favourite-rows { display: none; }
+@media (max-width: 820px) {
+  .favourite-rows { display: flex; flex-direction: column; gap: 8px; }
+  .panel:has(.favourite-rows) .table-wrap { display: none; }
+  .favourite-row {
+    display: flex; align-items: center; gap: 10px;
+    border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px;
+  }
+  .favourite-row-icon {
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    width: 32px; height: 32px; border-radius: 2222px; background: var(--surface-2); color: var(--text-dim);
+  }
+  .favourite-row-icon svg { width: 16px; height: 16px; }
+  .favourite-row-text { min-width: 0; }
+  .favourite-row-title { font-size: 13px; font-weight: 600; }
+  .favourite-row-sub { font-size: 12px; color: var(--text-faint); }
+}

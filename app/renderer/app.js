@@ -666,8 +666,10 @@ async function renderDashboard() {
   const overdue = pohledavky.filter((p) => p.dni_po_splatnosti > 0);
   const m = cashflow.monthly || [];
   const thisMonth = m[m.length - 1], lastMonth = m[m.length - 2];
+  const totalBalance = (cashflow.by_account || []).reduce((s, a) => s + Number(a.balance), 0);
 
   document.getElementById("view").innerHTML = `
+    ${renderMobileBalanceHero(totalBalance)}
     <div class="kpi-grid">
       <div class="kpi ${obrat.blizi_se_limitu_dph ? "bad" : ""}">
         <div class="label">Obrat za 12 měsíců</div>
@@ -710,7 +712,7 @@ async function renderDashboard() {
 
     <div class="two-col">
       <div class="panel">
-        <h2>Otevřené pohledávky a závazky</h2>
+        ${sectionHeader("Otevřené pohledávky a závazky", "#documents", "Zobrazit vše")}
         ${tableOrEmpty(pohledavky.slice(0, 8), [
           ["Doklad", (r) => `${DOC_TYPE_LABEL[r.doc_type]} ${esc(r.doc_number)}`],
           ["Protistrana", (r) => esc(r.protistrana || "—")],
@@ -720,16 +722,63 @@ async function renderDashboard() {
         ])}
       </div>
       <div class="panel">
-        <h2>Poslední aktivita (audit log)</h2>
+        ${sectionHeader("Poslední aktivita", "#auditlog", "Zobrazit vše")}
         ${tableOrEmpty(log, [
           ["Kdy", (r) => fmtDateTime(r.occurred_at)],
           ["Akce", (r) => esc(r.action)],
           ["Tabulka", (r) => esc(r.entity_table)],
           ["ID", (r) => r.entity_id ?? "—"],
         ])}
+        ${renderAuditLogRows(log)}
       </div>
     </div>
   `;
+}
+
+// ---------------------------------------------------------------------
+// Mobilní hero se zůstatkem (inspirováno FUTUR mobile banking kitem) —
+// velké číslo + skrýt/zobrazit přepínač, na desktopu skryté přes CSS.
+// Stav skrytí je perzistentní (localStorage), aby přežil navigaci mezi views.
+// ---------------------------------------------------------------------
+function balanceHidden() { return localStorage.getItem("balanceHidden") === "1"; }
+function toggleBalanceVisibility() {
+  localStorage.setItem("balanceHidden", balanceHidden() ? "" : "1");
+  renderDashboard();
+}
+function renderMobileBalanceHero(totalBalance) {
+  const hidden = balanceHidden();
+  return `
+    <div class="balance-hero">
+      <div class="balance-hero-label">Zůstatek na účtech</div>
+      <div class="balance-hero-value">${hidden ? "•••• ••" : fmtMoney(totalBalance)}</div>
+      <button type="button" class="balance-hero-toggle" data-action="toggle-balance-visibility">
+        ${hidden ? "Zobrazit" : "Skrýt"}
+      </button>
+    </div>`;
+}
+
+// Nadpis sekce + volitelné kulaté tlačítko vpravo (vzor "Section Header" +
+// pill button z FUTUR mobile kitu), sjednocené napříč panely.
+function sectionHeader(title, hash, label) {
+  return `
+    <div class="section-header">
+      <h2>${esc(title)}</h2>
+      ${hash ? `<a href="${hash}" class="section-header-pill">${esc(label)}</a>` : ""}
+    </div>`;
+}
+
+// Mobilní verze audit logu jako řádky ve stylu "favourite row" (ikona +
+// text + čas), místo tabulky — tabulka zůstává pro desktop, přepínáno CSS.
+function renderAuditLogRows(log) {
+  if (!log.length) return "";
+  return `<div class="favourite-rows">${log.map((r) => `
+    <div class="favourite-row">
+      <span class="favourite-row-icon">${navIcon("auditlog")}</span>
+      <div class="favourite-row-text">
+        <div class="favourite-row-title">${esc(r.action)} · ${esc(r.entity_table)}</div>
+        <div class="favourite-row-sub">${fmtDateTime(r.occurred_at)}</div>
+      </div>
+    </div>`).join("")}</div>`;
 }
 
 // Malý badge s % změnou proti minulému měsíci (barva jen podle znaménka,
@@ -2904,6 +2953,7 @@ document.addEventListener("click", async (e) => {
       case "new-template": templateFormModal(); break;
       case "close-modal": closeModal(); break;
       case "toggle-theme": toggleTheme(); break;
+      case "toggle-balance-visibility": toggleBalanceVisibility(); break;
       case "auth-tab": AUTH_TAB = e.target.closest("[data-tab]").dataset.tab; renderAuthScreen(); break;
       case "logout": e.preventDefault(); await handleLogout(); break;
       case "add-posting-line": addPostingLineRow(); break;
