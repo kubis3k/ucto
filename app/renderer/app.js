@@ -15,6 +15,24 @@ function authToken() { return localStorage.getItem("authToken"); }
 function setAuthToken(token) { localStorage.setItem("authToken", token); }
 function clearAuthToken() { localStorage.removeItem("authToken"); }
 
+// ---------------------------------------------------------------------
+// Světlý / tmavý režim. Téma je aplikováno už inline skriptem v index.html
+// (bez bliknutí); zde jen přepínání, uložení a synchronizace ikon.
+// ---------------------------------------------------------------------
+const SUN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+const MOON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>';
+function currentTheme() { return document.documentElement.getAttribute("data-theme") || "dark"; }
+function themeIconSvg() { return currentTheme() === "light" ? MOON_SVG : SUN_SVG; }
+function refreshThemeIcons() {
+  document.querySelectorAll("[data-theme-toggle]").forEach((b) => { b.innerHTML = themeIconSvg(); });
+}
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  try { localStorage.setItem("theme", theme); } catch (e) {}
+  refreshThemeIcons();
+}
+function toggleTheme() { applyTheme(currentTheme() === "light" ? "dark" : "light"); }
+
 async function api(method, path, body) {
   const headers = body ? { "Content-Type": "application/json" } : {};
   const token = authToken();
@@ -134,13 +152,14 @@ function renderAuthScreen() {
   document.getElementById("app").classList.add("hidden");
 
   const tabs = [
-    ["login", "Přihlásit se"],
-    ["set-password", "Nastavit heslo"],
-    ["register", "Založit firmu"],
+    ["login", "Přihlásit"],
+    ["set-password", "Nové heslo"],
+    ["register", "Firma"],
     ["bankid", "BankID"],
   ];
 
   screen.innerHTML = `
+    <button class="theme-toggle auth-theme-toggle" data-action="toggle-theme" data-theme-toggle aria-label="Přepnout světlý/tmavý režim"></button>
     <div class="auth-brand-panel">
       <div class="auth-brand-inner">
         <div class="auth-brand-top">
@@ -177,6 +196,7 @@ function renderAuthScreen() {
   renderAuthTabBody();
   positionAuthTabIndicator();
   animateBalanceSheet();
+  refreshThemeIcons();
 }
 
 function positionAuthTabIndicator() {
@@ -2006,6 +2026,7 @@ document.addEventListener("click", async (e) => {
       case "new-inventory": inventoryFormModal(); break;
       case "new-template": templateFormModal(); break;
       case "close-modal": closeModal(); break;
+      case "toggle-theme": toggleTheme(); break;
       case "auth-tab": AUTH_TAB = e.target.closest("[data-tab]").dataset.tab; renderAuthScreen(); break;
       case "logout": e.preventDefault(); await handleLogout(); break;
       case "add-posting-line": addPostingLineRow(); break;
@@ -2102,6 +2123,7 @@ window.addEventListener("unhandledrejection", (e) => console.error("Neošetřen�
 
 window.addEventListener("hashchange", router);
 window.addEventListener("DOMContentLoaded", checkAuthAndStart);
+window.addEventListener("DOMContentLoaded", refreshThemeIcons);
 
 async function checkAuthAndStart() {
   const inviteMatch = location.hash.match(/^#accept-invite=(.+)$/);
