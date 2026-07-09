@@ -206,7 +206,7 @@ function renderAuthScreen() {
     <div class="auth-brand-panel">
       <div class="auth-brand-inner">
         <div class="auth-brand-top">
-          <div class="brand-mark">GE</div>
+          <div class="auth-mark">GE</div>
           <div class="auth-brand-wordmark">Globaal Elevate<span>Účetní systém</span></div>
         </div>
         <div class="auth-hero">
@@ -221,7 +221,7 @@ function renderAuthScreen() {
       </div>
     </div>
     <div class="auth-form-panel">
-      <div class="auth-card">
+      <div class="auth-card ${AUTH_TAB === "register" ? "auth-card-wide" : ""}">
         <h1>Přihlášení</h1>
         <div class="auth-sub">Přístup je sdílený podle firmy — kolegové ve stejné firmě vidí stejná data.</div>
         <div class="auth-tabs">
@@ -275,12 +275,21 @@ function renderAuthTabBody() {
   } else if (AUTH_TAB === "register") {
     body.innerHTML = `
       <form data-form="auth-register-company">
+        <div class="auth-form-section-title">Firma</div>
         <label>Název firmy</label><input type="text" name="company_name" required />
-        <label>IČO</label><input type="text" name="ico" required />
-        <label>DIČ (nepovinné)</label><input type="text" name="dic" />
-        <label>Vaše jméno</label><input type="text" name="full_name" required />
-        <label>E-mail</label><input type="email" name="email" autocomplete="email" required />
+        <div class="form-grid">
+          <div><label>IČO</label><input type="text" name="ico" required /></div>
+          <div><label>DIČ (nepovinné)</label><input type="text" name="dic" /></div>
+        </div>
+
+        <div class="auth-form-section-title">Váš přístup</div>
+        <div class="form-grid">
+          <div><label>Vaše jméno</label><input type="text" name="full_name" required /></div>
+          <div><label>E-mail</label><input type="email" name="email" autocomplete="email" required /></div>
+        </div>
         <label>Heslo (min. 8 znaků)</label>${passwordField("password", 'autocomplete="new-password" minlength="8" required')}
+
+        <div class="auth-form-section-title">Branding na fakturách (nepovinné)</div>
         ${brandingFieldsHtml()}
         <div class="form-actions"><button type="submit">Založit firmu</button></div>
       </form>
