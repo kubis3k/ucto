@@ -978,7 +978,8 @@ function documentFormModal() {
         <div><label>DUZP (datum uskutečnění)</label><input type="date" name="taxable_supply_date" /></div>
         <div><label>Splatnost</label><input type="date" name="due_date" /></div>
         <div><label>Variabilní symbol</label><input type="text" name="variable_symbol" /></div>
-        <div><label>Celková částka (Kč)</label><input type="number" step="0.01" name="total_amount" required /></div>
+        <div><label>Celková částka</label><input type="number" step="0.01" name="total_amount" required /></div>
+        <div><label>Měna</label><select name="currency"><option value="CZK">CZK</option><option value="EUR">EUR</option><option value="USD">USD</option></select></div>
       </div>
       <label>Popis / obsah účetního případu</label>
       <textarea name="description" rows="2" required></textarea>
@@ -1100,7 +1101,11 @@ async function showDocumentDetail(id) {
           <tr><td class="text-dim">Splatnost</td><td>${fmtDate(doc.due_date)}</td></tr>
           <tr><td class="text-dim">Variabilní symbol</td><td class="mono">${esc(doc.variable_symbol || "—")}</td></tr>
           <tr><td class="text-dim">Popis</td><td>${esc(doc.description)}</td></tr>
-          <tr><td class="text-dim">Celkem</td><td><strong>${fmtMoney(doc.total_amount)}</strong></td></tr>
+          <tr><td class="text-dim">Celkem</td><td><strong>${doc.currency && doc.currency !== "CZK" ? `${Number(doc.total_amount).toLocaleString("cs-CZ")} ${esc(doc.currency)}` : fmtMoney(doc.total_amount)}</strong></td></tr>
+          ${doc.currency && doc.currency !== "CZK" ? `
+          <tr><td class="text-dim">Kurz vystavení (ČNB)</td><td>${doc.fx_rate ? `${Number(doc.fx_rate).toLocaleString("cs-CZ", {maximumFractionDigits:3})} CZK / ${doc.fx_rate_unit || 1} ${esc(doc.currency)}` : `<span class="text-dim">nezjištěn</span>`}</td></tr>
+          <tr><td class="text-dim">Přepočet na CZK</td><td>${doc.fx_rate ? `<strong>${fmtMoney(Math.round(doc.total_amount * (doc.fx_rate / (doc.fx_rate_unit || 1)) * 100) / 100)}</strong>` : "—"}</td></tr>
+          ` : ""}
           ${doc.is_vat_document ? `<tr><td class="text-dim">Základ / DPH</td><td>${fmtMoney(doc.vat_base_amount)} / ${fmtMoney(doc.vat_amount)} (${doc.vat_rate}%)</td></tr>` : ""}
         </table>
       </div>
@@ -2124,7 +2129,13 @@ async function renderBank() {
             <td>${booked ? `<span class="badge zauctovany">zaúčtováno</span>` : `<span class="badge koncept">nezaúčtováno</span>`}</td>
             <td>${booked ? "—" : `
                 <select class="small" data-match-id="${l.id}" style="width:auto;display:inline-block">
-                  <option value="">Spárovat s dokladem…</option>${docs.map((d) => `<option value="${d.id}">${esc(d.doc_number)} (${fmtMoney(d.total_amount)})</option>`).join("")}
+                  <option value="">Spárovat s dokladem…</option>${docs.map((d) => {
+                    const foreign = d.currency && d.currency !== "CZK";
+                    const label = foreign
+                      ? `${esc(d.doc_number)} (${Number(d.total_amount).toLocaleString("cs-CZ")} ${esc(d.currency)}${d.fx_rate ? `, kurz vystavení ≈ ${fmtMoney(Math.round(d.total_amount * (d.fx_rate/(d.fx_rate_unit||1)) * 100)/100)}` : ""})`
+                      : `${esc(d.doc_number)} (${fmtMoney(d.total_amount)})`;
+                    return `<option value="${d.id}">${label}</option>`;
+                  }).join("")}
                 </select>
                 ${suggestion
                   ? `<button class="small" data-action="quick-post-suggested" data-id="${l.id}" data-account="${suggestion.account_id}" title="Návrh podle ${esc(suggestion.source)}">⚡ ${esc(suggestion.account_number)} ${esc(acctName(suggestion.account_number))}</button>`
@@ -2139,8 +2150,16 @@ async function renderBank() {
   document.querySelectorAll("[data-match-id]").forEach((sel) => {
     sel.onchange = async (e) => {
       if (!e.target.value) return;
-      await api("POST", `/bank/${sel.dataset.matchId}/match`, { document_id: e.target.value });
-      toast("Pohyb byl spárován s dokladem.");
+      try {
+        const result = await api("POST", `/bank/${sel.dataset.matchId}/match`, { document_id: e.target.value, created_by: STATE.user.id });
+        if (result?.fx_posting) {
+          toast(`Pohyb spárován. Vznikl vyrovnávací zápis kurzového rozdílu (zápis č. ${result.fx_posting.posting_number}).`);
+        } else {
+          toast("Pohyb byl spárován s dokladem.");
+        }
+      } catch (err) {
+        toast(err.message, "error");
+      }
       renderBank();
     };
   });
@@ -2448,6 +2467,7 @@ async function renderReports() {
         <button type="button" class="${REPORT_TAB === "vykazy" ? "" : "secondary"}" data-action="reports-tab" data-tab="vykazy">Rozvaha + Výsledovka</button>
         <button type="button" class="${REPORT_TAB === "priloha" ? "" : "secondary"}" data-action="reports-tab" data-tab="priloha">Příloha</button>
         <div class="spacer"></div>
+        <button type="button" class="secondary" data-action="precenit-kurzove" data-as-of="${asOf}">Přecenit otevřené pohledávky/závazky k rozvahovému dni</button>
         <button type="button" class="secondary" data-action="download-zaverka-pdf" data-period="${period || ""}" data-as-of="${asOf}">Stáhnout kompletní závěrku (PDF)</button>
       </div>
     </div>
@@ -2509,6 +2529,19 @@ async function renderReports() {
   `;
   document.getElementById("repAsOf").onchange = renderReports;
   document.getElementById("repPeriod").onchange = renderReports;
+}
+
+// Přecenění otevřených cizoměnových pohledávek/závazků k rozvahovému dni
+// (§ 24 odst. 6-7 ZoÚ) — explicitní akce, idempotentní (viz lib/fxRevaluation.js).
+async function precenitKurzove(asOf) {
+  if (!confirm(`Přecenit otevřené cizoměnové pohledávky/závazky k rozvahovému dni ${asOf}? Vzniknou účetní zápisy kurzových rozdílů (563/663).`)) return;
+  try {
+    const result = await api("POST", "/reports/precenit-kurzove", { asOf, created_by: STATE.user.id });
+    const posted = result.vysledky.filter((v) => !v.skipped);
+    const skipped = result.vysledky.filter((v) => v.skipped);
+    toast(`Přeceněno: ${posted.length} dokladů zaúčtováno, ${skipped.length} přeskočeno.`);
+    renderReports();
+  } catch (err) { toast(err.message, "error"); }
 }
 
 async function downloadZaverkaPdf(periodId, asOf) {
@@ -3075,8 +3108,9 @@ document.addEventListener("click", async (e) => {
       case "suggest-matches": await suggestMatches(); break;
       case "confirm-match": {
         const el = e.target.closest("[data-bank]");
-        await api("POST", `/bank/${el.dataset.bank}/match`, { document_id: el.dataset.doc });
-        toast("Pohyb spárován."); renderBank(); break;
+        const result = await api("POST", `/bank/${el.dataset.bank}/match`, { document_id: el.dataset.doc, created_by: STATE.user.id });
+        toast(result?.fx_posting ? `Pohyb spárován. Vznikl vyrovnávací zápis kurzového rozdílu (zápis č. ${result.fx_posting.posting_number}).` : "Pohyb spárován.");
+        renderBank(); break;
       }
       case "new-asset": assetFormModal(); break;
       case "new-inventory": inventoryFormModal(); break;
@@ -3181,6 +3215,7 @@ document.addEventListener("click", async (e) => {
       }
 
       case "reports-tab": REPORT_TAB = e.target.closest("[data-tab]").dataset.tab; renderReports(); break;
+      case "precenit-kurzove": await precenitKurzove(e.target.closest("[data-as-of]").dataset.asOf); break;
       case "download-zaverka-pdf": {
         const el = e.target.closest("[data-period]");
         await downloadZaverkaPdf(el.dataset.period, el.dataset.asOf);

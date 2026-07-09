@@ -94,6 +94,9 @@ async function migrate() {
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_statement_line_external_ref
      ON bank_statement_line(accounting_unit_id, external_ref) WHERE external_ref IS NOT NULL`
   );
+  // Kurz vystavení cizoměnového dokladu (§ 24 odst. 6-7 ZoÚ) — viz schema.sql pro vysvětlení.
+  await ensureColumn("document", "fx_rate", "REAL");
+  await ensureColumn("document", "fx_rate_unit", "INTEGER DEFAULT 1");
 }
 
 function persist() {

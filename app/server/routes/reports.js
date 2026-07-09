@@ -3,6 +3,7 @@ const store = require("../db");
 const reports = require("../lib/reports");
 const { writeAuditLog } = require("../lib/core");
 const { buildStatementPdf } = require("../lib/statementPdf");
+const { preceniOtevrenePohledavkyZavazky } = require("../lib/fxRevaluation");
 const router = express.Router();
 
 // GET /api/reports/hlavni-kniha?unit=1&asOf=2026-12-31
@@ -183,6 +184,21 @@ router.get("/zaverka.pdf", async (req, res) => {
     res.setHeader("Content-Disposition", `attachment; filename="zaverka-${period.fiscal_year}.pdf"`);
     res.send(pdfBuffer);
   } catch (err) { res.status(err.status || 400).json({ error: err.message }); }
+});
+
+// POST /api/reports/precenit-kurzove?unit=1 — { asOf, created_by } — přecenění
+// otevřených cizoměnových pohledávek/závazků k rozvahovému dni (§ 24 odst. 6-7
+// ZoÚ). Explicitní akce, idempotentní (viz lib/fxRevaluation.js). Scope na
+// accounting_unit_id přes req.user (INVARIANT).
+router.post("/precenit-kurzove", async (req, res) => {
+  const unitId = req.user.accountingUnitId;
+  const { asOf, created_by } = req.body;
+  if (!asOf) return res.status(400).json({ error: "Chybí rozvahový den (asOf)." });
+  try {
+    const result = await store.transaction(() => preceniOtevrenePohledavkyZavazky(unitId, asOf, created_by || req.user.id));
+    store.persist();
+    res.json({ rozvahovy_den: asOf, vysledky: result });
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 module.exports = router;

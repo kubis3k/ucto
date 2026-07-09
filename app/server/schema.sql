@@ -167,6 +167,12 @@ CREATE TABLE IF NOT EXISTS document (
     description         TEXT NOT NULL,
     total_amount        REAL NOT NULL,
     currency            TEXT NOT NULL DEFAULT 'CZK',
+    -- Kurz vystavení "zamrznutý" k datu vzniku dokladu (ČNB, viz lib/cnbExchangeRate.js) —
+    -- CZK za fx_rate_unit jednotek currency. NIKDY se nepřepisuje (i po revizi ČNB kurzu),
+    -- protože přepočet do CZK při zaúčtování (documents.js POST /:id/post) i kurzový rozdíl
+    -- při úhradě (bank.js POST /:id/match) na něj spoléhají jako na neměnnou referenci.
+    fx_rate             REAL,
+    fx_rate_unit        INTEGER DEFAULT 1,
 
     is_vat_document     INTEGER NOT NULL DEFAULT 0,
     vat_base_amount     REAL,
@@ -548,6 +554,25 @@ CREATE TABLE IF NOT EXISTS financial_statement_note_version (
     snapshot_json        TEXT NOT NULL,
     created_at          TEXT NOT NULL DEFAULT (datetime('now')),
     created_by          INTEGER REFERENCES app_user(id)
+);
+
+-- ---------------------------------------------------------------------
+-- Kurzy ČNB — cache (§ 24 odst. 6-7 ZoÚ, kurz devizového trhu vyhlašovaný ČNB).
+-- GLOBÁLNÍ, BEZ accounting_unit_id — VĚDOMÁ výjimka z invariantu "vše scoped
+-- na unit" (viz flow-state.md "ROZHODNUTÍ" Úkol 4): kurz ČNB je veřejné
+-- referenční číslo, stejné pro všechny firmy v systému, sdílení cache mezi
+-- jednotkami šetří opakované pomalé fetche na cnb.cz. Tabulka nemá žádnou
+-- user-facing /:id routu — čte/zapisuje se jen interně přes lib/cnbExchangeRate.js.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS exchange_rate (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    rate_date           TEXT NOT NULL,
+    currency            TEXT NOT NULL,
+    rate                REAL NOT NULL,
+    unit                INTEGER NOT NULL DEFAULT 1,
+    source              TEXT NOT NULL DEFAULT 'CNB',
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (rate_date, currency)
 );
 
 -- ---------------------------------------------------------------------

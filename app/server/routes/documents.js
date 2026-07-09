@@ -9,6 +9,7 @@ const qrplatba = require("../lib/qrplatba");
 const invoiceScan = require("../lib/invoiceScan");
 const { buildInvoicePdf } = require("../lib/invoicePdf");
 const mailer = require("../lib/mailer");
+const { getRate } = require("../lib/cnbExchangeRate");
 const router = express.Router();
 
 const ALLOWED_MIME_TYPES = new Set(["application/pdf", "text/csv", "application/vnd.ms-excel", "image/png", "image/jpeg"]);
@@ -64,7 +65,7 @@ router.get("/:id", async (req, res) => {
 router.post("/", async (req, res) => {
   const {
     accounting_unit_id, doc_type, contact_id, project_id, period_id, variable_symbol,
-    issue_date, taxable_supply_date, due_date, description, total_amount,
+    issue_date, taxable_supply_date, due_date, description, total_amount, currency,
     is_vat_document, vat_base_amount, vat_rate, vat_amount, counterparty_dic,
     responsible_user_id, cash_payee_name, cash_payee_address, cash_payee_id_number,
     lines,
@@ -76,15 +77,25 @@ router.post("/", async (req, res) => {
       const year = new Date(issue_date).getFullYear();
       const docNumber = await generateDocumentNumber(accounting_unit_id, doc_type, year);
 
+      // Kurz vystavení cizoměnového dokladu (§ 24 odst. 6-7 ZoÚ) — "zamrzne" se
+      // hned při vzniku dokladu. Výpadek ČNB NESMÍ zablokovat vytvoření dokladu
+      // (uloží se NULL, doplní se ručně) — viz flow-state.md plán úkolu 4, krok 3.
+      const cur = currency || "CZK";
+      let fxRate = null, fxRateUnit = 1;
+      if (cur !== "CZK") {
+        const rate = await getRate(cur, issue_date).catch(() => null);
+        if (rate) { fxRate = rate.rate; fxRateUnit = rate.unit; }
+      }
+
       await store.run(
         `INSERT INTO document
           (accounting_unit_id, doc_type, doc_number, variable_symbol, contact_id, project_id, period_id,
-           issue_date, taxable_supply_date, due_date, description, total_amount,
+           issue_date, taxable_supply_date, due_date, description, total_amount, currency, fx_rate, fx_rate_unit,
            is_vat_document, vat_base_amount, vat_rate, vat_amount, counterparty_dic,
            responsible_user_id, cash_payee_name, cash_payee_address, cash_payee_id_number)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [accounting_unit_id, doc_type, docNumber, variable_symbol || null, contact_id || null, project_id || null, period_id,
-         issue_date, taxable_supply_date || null, due_date || null, description, total_amount,
+         issue_date, taxable_supply_date || null, due_date || null, description, total_amount, cur, fxRate, fxRateUnit,
          is_vat_document ? 1 : 0, vat_base_amount || null, vat_rate || null, vat_amount || null, counterparty_dic || null,
          responsible_user_id, cash_payee_name || null, cash_payee_address || null, cash_payee_id_number || null]
       );
@@ -181,10 +192,31 @@ router.post("/:id/post", async (req, res) => {
       if (!tpl) throw new Error("Předkontace nenalezena.");
       const tplLines = await store.all("SELECT * FROM posting_template_line WHERE template_id = ?", [template_id]);
 
+      // Přepočet do CZK při zaúčtování — total_amount NA DOKLADU zůstává v cizí
+      // měně (kvůli faktuře/QR/invoice_payment, viz flow-state.md plán úkolu 4,
+      // krok 4), přepočítá se až částka posting_line podle "zamrzlého" kurzu
+      // vystavení (doc.fx_rate/doc.fx_rate_unit). MD=D kontrola platí dál, protože
+      // všechny částky škálují stejným kurzem.
+      const toCzk = (value) => {
+        if (doc.currency && doc.currency !== "CZK" && doc.fx_rate) {
+          return Math.round(value * (doc.fx_rate / (doc.fx_rate_unit || 1)) * 100) / 100;
+        }
+        return value;
+      };
+      // FIX P1 (critic 2026-07-10, kurzové rozdíly): zaklad/dph/celkem se NESMÍ
+      // přepočítat na CZK NEZÁVISLE — nezávislé zaokrouhlení na 2 des. místa po
+      // vynásobení kurzem běžně způsobí zaklad_czk + dph_czk != celkem_czk (o
+      // haléř), a předkontace s oběma řádky (MD zaklad, MD dph, D celkem) by pak
+      // routinně padala na "nevyrovnaný zápis" u každé cizoměnové faktury s DPH.
+      // dph_czk je proto DOPOČÍTANÝ jako rozdíl celkem_czk-zaklad_czk, ne vlastní
+      // nezávislé zaokrouhlení — garantuje přesný součet i po převodu měny.
+      const zaklad_czk = toCzk(doc.vat_base_amount || 0);
+      const celkem_czk = toCzk(doc.total_amount);
+      const dph_czk = Math.round((celkem_czk - zaklad_czk) * 100) / 100;
       const amountFor = (src) => {
-        if (src === "zaklad") return doc.vat_base_amount || 0;
-        if (src === "dph") return doc.vat_amount || 0;
-        return doc.total_amount;
+        if (src === "zaklad") return zaklad_czk;
+        if (src === "dph") return dph_czk;
+        return celkem_czk;
       };
       const lines = tplLines.map((tl) => ({ account_id: tl.account_id, side: tl.side, amount: amountFor(tl.amount_source) }))
         .filter((l) => l.amount > 0);

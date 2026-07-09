@@ -153,6 +153,9 @@ CREATE TABLE IF NOT EXISTS document (
     description         TEXT NOT NULL,
     total_amount        DOUBLE PRECISION NOT NULL,
     currency            TEXT NOT NULL DEFAULT 'CZK',
+    -- Kurz vystavení "zamrznutý" k datu vzniku dokladu — viz schema.sql pro vysvětlení, 1:1 překlad.
+    fx_rate             DOUBLE PRECISION,
+    fx_rate_unit        INTEGER DEFAULT 1,
 
     is_vat_document     INTEGER NOT NULL DEFAULT 0,
     vat_base_amount     DOUBLE PRECISION,
@@ -177,6 +180,8 @@ CREATE TABLE IF NOT EXISTS document (
 
     UNIQUE (accounting_unit_id, doc_type, doc_number)
 );
+ALTER TABLE document ADD COLUMN IF NOT EXISTS fx_rate DOUBLE PRECISION;
+ALTER TABLE document ADD COLUMN IF NOT EXISTS fx_rate_unit INTEGER DEFAULT 1;
 
 CREATE TABLE IF NOT EXISTS document_line (
     id                  SERIAL PRIMARY KEY,
@@ -499,6 +504,21 @@ CREATE TABLE IF NOT EXISTS financial_statement_note_version (
     snapshot_json        TEXT NOT NULL,
     created_at          TEXT NOT NULL DEFAULT (now()::text),
     created_by          INTEGER REFERENCES app_user(id)
+);
+
+-- ---------------------------------------------------------------------
+-- Kurzy ČNB — cache. GLOBÁLNÍ, bez accounting_unit_id — viz schema.sql pro
+-- vysvětlení (veřejná referenční data, vědomá výjimka z per-unit scope invariantu).
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS exchange_rate (
+    id                  SERIAL PRIMARY KEY,
+    rate_date           TEXT NOT NULL,
+    currency            TEXT NOT NULL,
+    rate                DOUBLE PRECISION NOT NULL,
+    unit                INTEGER NOT NULL DEFAULT 1,
+    source              TEXT NOT NULL DEFAULT 'CNB',
+    created_at          TEXT NOT NULL DEFAULT (now()::text),
+    UNIQUE (rate_date, currency)
 );
 
 -- ---------------------------------------------------------------------
