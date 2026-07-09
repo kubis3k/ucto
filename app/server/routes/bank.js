@@ -245,10 +245,27 @@ router.get("/cashflow", async (req, res) => {
       .filter((l) => l.statement_date >= cutoff(days) && (positive ? l.amount > 0 : l.amount < 0))
       .reduce((s, l) => s + Math.abs(Number(l.amount)), 0);
 
+    // Měsíční přehled za posledních 12 měsíců pro graf na dashboardu — počítáno
+    // v JS ze stejných řádků (žádná dialektově specifická SQL date funkce).
+    const monthKey = (d) => d.slice(0, 7); // "YYYY-MM"
+    const now = new Date();
+    const months = [];
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    }
+    const monthly = months.map((month) => {
+      const inMonth = lines.filter((l) => monthKey(l.statement_date) === month);
+      const income = inMonth.filter((l) => l.amount > 0).reduce((s, l) => s + Number(l.amount), 0);
+      const expense = inMonth.filter((l) => l.amount < 0).reduce((s, l) => s + Math.abs(Number(l.amount)), 0);
+      return { month, income, expense, net: income - expense };
+    });
+
     res.json({
       by_account: Object.entries(balances).map(([bank_account, balance]) => ({ bank_account, balance })),
       last30: { income: sumSince(30, true), expense: sumSince(30, false) },
       last90: { income: sumSince(90, true), expense: sumSince(90, false) },
+      monthly,
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

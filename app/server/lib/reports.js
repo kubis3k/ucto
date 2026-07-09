@@ -127,12 +127,13 @@ async function obratDph(unitId) {
   };
 }
 
-// Kniha pohledávek a závazků — nesplacené faktury
+// Kniha pohledávek a závazků — nesplacené faktury. Dny po splatnosti se
+// počítají v JS, ne v SQL (julianday() je jen SQLite, Postgres ho nemá —
+// takhle to funguje shodně na obou dialektech beze změny SQL).
 async function knihaPohledavkyZavazky(unitId) {
-  return await store.all(
+  const rows = await store.all(
     `SELECT d.id AS document_id, d.doc_type, d.doc_number, c.name AS protistrana,
-            d.issue_date, d.due_date, d.total_amount, d.status,
-            CAST(julianday('now') - julianday(d.due_date) AS INTEGER) AS dni_po_splatnosti
+            d.issue_date, d.due_date, d.total_amount, d.status
      FROM document d
      LEFT JOIN contact c ON c.id = d.contact_id
      WHERE d.accounting_unit_id = ? AND d.doc_type IN ('faktura_vydana','faktura_prijata')
@@ -141,6 +142,11 @@ async function knihaPohledavkyZavazky(unitId) {
      ORDER BY d.due_date`,
     [unitId]
   );
+  const today = new Date(new Date().toDateString());
+  return rows.map((r) => ({
+    ...r,
+    dni_po_splatnosti: r.due_date ? Math.floor((today - new Date(r.due_date)) / 86400000) : null,
+  }));
 }
 
 module.exports = { hlavniKniha, rozvaha, vysledovka, obratDph, knihaPohledavkyZavazky, accountNaturalBalance };

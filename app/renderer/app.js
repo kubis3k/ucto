@@ -206,8 +206,8 @@ function renderAuthScreen() {
     <div class="auth-brand-panel">
       <div class="auth-brand-inner">
         <div class="auth-brand-top">
-          <div class="auth-mark">GE</div>
-          <div class="auth-brand-wordmark">Globaal Elevate<span>Účetní systém</span></div>
+          <div class="brand-logo-plate"><img src="assets/logo.png" alt="Globaal Elevate Production" class="brand-logo" /></div>
+          <div class="auth-brand-wordmark"><span>Účetní systém</span></div>
         </div>
         <div class="auth-hero">
           <h2>Nezávislé účetnictví.<br><em>Knihy, které vždy sedí.</em></h2>
@@ -603,11 +603,12 @@ async function refreshCoreState() {
 // =====================================================================
 async function renderDashboard() {
   const unit = STATE.unit.id;
-  const [obrat, pohledavky, docs, log] = await Promise.all([
+  const [obrat, pohledavky, docs, log, cashflow] = await Promise.all([
     api("GET", `/reports/obrat-dph?unit=${unit}`),
     api("GET", `/reports/pohledavky-zavazky?unit=${unit}`),
     api("GET", `/documents?unit=${unit}&status=koncept`),
     api("GET", `/audit-log?unit=${unit}&limit=8`),
+    api("GET", `/bank/cashflow?unit=${unit}`),
   ]);
   const overdue = pohledavky.filter((p) => p.dni_po_splatnosti > 0);
 
@@ -635,6 +636,11 @@ async function renderDashboard() {
       </div>
     </div>
 
+    <div class="panel">
+      <h2>Cashflow za 12 měsíců</h2>
+      ${renderCashflowChart(cashflow.monthly)}
+    </div>
+
     <div class="two-col">
       <div class="panel">
         <h2>Otevřené pohledávky a závazky</h2>
@@ -657,6 +663,44 @@ async function renderDashboard() {
       </div>
     </div>
   `;
+}
+
+const MONTH_ABBR = ["led", "úno", "bře", "dub", "kvě", "čvn", "čvc", "srp", "zář", "říj", "lis", "pro"];
+// Jednoduchý sloupcový graf příjmů/výdajů (čisté SVG, žádná knihovna) — příjmy
+// zelené, výdaje červené, dva sloupce vedle sebe na měsíc, škálováno na max.
+function renderCashflowChart(monthly) {
+  if (!monthly || !monthly.length) return `<div class="empty-state">Žádná bankovní data.</div>`;
+  const max = Math.max(1, ...monthly.flatMap((m) => [m.income, m.expense]));
+  const groupW = 56, barW = 16, gap = 4, chartH = 140, labelH = 24;
+  const totalW = monthly.length * groupW;
+  const bars = monthly.map((m, i) => {
+    const x = i * groupW + (groupW - (barW * 2 + gap)) / 2;
+    const hIncome = (m.income / max) * chartH;
+    const hExpense = (m.expense / max) * chartH;
+    const [yy, mm] = m.month.split("-");
+    const label = `${MONTH_ABBR[Number(mm) - 1]} ${yy.slice(2)}`;
+    return `
+      <g>
+        <rect x="${x}" y="${chartH - hIncome}" width="${barW}" height="${hIncome}" rx="3" fill="var(--green)">
+          <title>Příjmy ${label}: ${fmtMoney(m.income)}</title>
+        </rect>
+        <rect x="${x + barW + gap}" y="${chartH - hExpense}" width="${barW}" height="${hExpense}" rx="3" fill="var(--red)">
+          <title>Výdaje ${label}: ${fmtMoney(m.expense)}</title>
+        </rect>
+        <text x="${x + barW + gap / 2}" y="${chartH + 16}" text-anchor="middle" class="cashflow-label">${esc(label)}</text>
+      </g>`;
+  }).join("");
+  return `
+    <div class="cashflow-chart-wrap">
+      <svg viewBox="0 0 ${totalW} ${chartH + labelH}" class="cashflow-chart" preserveAspectRatio="none">
+        <line x1="0" y1="${chartH}" x2="${totalW}" y2="${chartH}" stroke="var(--border)" stroke-width="1" />
+        ${bars}
+      </svg>
+      <div class="cashflow-legend">
+        <span><i style="background:var(--green)"></i>Příjmy</span>
+        <span><i style="background:var(--red)"></i>Výdaje</span>
+      </div>
+    </div>`;
 }
 
 function tableOrEmpty(rows, columns) {
