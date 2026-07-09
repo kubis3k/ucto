@@ -2289,7 +2289,24 @@ async function checkAuthAndStart() {
   const inviteMatch = location.hash.match(/^#accept-invite=(.+)$/);
   if (inviteMatch) return renderAcceptInviteScreen(inviteMatch[1]);
 
-  // Návrat z reálného BankID OIDC přihlášení (viz server/routes/auth.js handleBankidOidcCallback).
+  // Návrat z BankID implicit flow — access_token je v hash fragmentu (#access_token=...&state=...).
+  const hashParams = new URLSearchParams(location.hash.slice(1));
+  if (hashParams.has("access_token")) {
+    const access_token = hashParams.get("access_token");
+    const state = hashParams.get("state");
+    location.hash = "";
+    try {
+      const data = await api("POST", "/auth/bankid/token-verify", { access_token, state });
+      setAuthToken(data.token);
+    } catch (err) {
+      AUTH_TAB = "bankid";
+      renderAuthScreen();
+      const errBox = document.getElementById("authError");
+      if (errBox) errBox.textContent = err.message;
+      return;
+    }
+  }
+  // Fallback pro mock flow (#bankid-login) a chybový redirect (#bankid-error).
   const bankidLoginMatch = location.hash.match(/^#bankid-login=(.+)$/);
   if (bankidLoginMatch) {
     setAuthToken(bankidLoginMatch[1]);

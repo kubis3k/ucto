@@ -1,8 +1,6 @@
 {
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index" },
-    { "source": "/", "has": [{ "type": "query", "key": "code" }], "destination": "/api/index" },
-    { "source": "/", "has": [{ "type": "query", "key": "error" }], "destination": "/api/index" },
     { "source": "/", "destination": "/app/renderer/index.html" },
     { "source": "/login", "destination": "/app/renderer/index.html" },
     { "source": "/tos", "destination": "/app/renderer/tos.html" },

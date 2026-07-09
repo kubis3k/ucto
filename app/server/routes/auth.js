@@ -206,29 +206,20 @@ router.post("/bankid/callback", async (req, res) => {
   }
 });
 
-// GET / (jen když ?code nebo ?error je v query — viz vercel.json a index.js) —
-// reálný OIDC redirect callback z BankID. redirect_uri je zaregistrovaný jako
-// kořen domény, ne /api/auth/..., proto se to mountuje jinde (index.js), ale
-// logika žije tady vedle zbytku BankID kódu.
-async function handleBankidOidcCallback(req, res) {
-  const redirectWithError = (message) => res.redirect(`/#bankid-error=${encodeURIComponent(message)}`);
-
-  if (req.query.error) {
-    return redirectWithError(req.query.error_description || req.query.error);
-  }
+// POST /api/auth/bankid/token-verify — implicit flow: frontend předá access_token z hash fragmentu
+router.post("/bankid/token-verify", async (req, res) => {
+  const { access_token, state } = req.body;
+  if (!access_token) return res.status(400).json({ error: "Chybí access_token." });
   try {
-    const { accountingUnitId } = verifyState(req.query.state);
-    const tokens = await bankidOidc.exchangeCodeForToken(req.query.code);
-    const profile = await bankidOidc.fetchUserInfo(tokens.access_token);
+    const { accountingUnitId } = verifyState(state);
+    const profile = await bankidOidc.fetchUserInfo(access_token);
     const fullName = profile.name || `${profile.given_name || ""} ${profile.family_name || ""}`.trim();
-
     const user = await verifyAndUpsertBankidUser({ accounting_unit_id: accountingUnitId, full_name: fullName, email: profile.email });
-    const token = signSession(user);
-    res.redirect(`/#bankid-login=${token}`);
+    res.json({ user: publicUser(user), token: signSession(user) });
   } catch (err) {
-    redirectWithError(err.message);
+    if (String(err.message).includes("UNIQUE")) return res.status(409).json({ error: "Uživatel s tímto e-mailem už existuje pod jiným jménem." });
+    res.status(err.status || 400).json({ error: err.message });
   }
-}
+});
 
 module.exports = router;
-module.exports.handleBankidOidcCallback = handleBankidOidcCallback;

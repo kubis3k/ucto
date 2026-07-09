@@ -32,34 +32,15 @@ async function buildAuthorizeUrl({ state }) {
   const params = new URLSearchParams({
     client_id: process.env.BANKID_CLIENT_ID,
     redirect_uri: process.env.BANKID_REDIRECT_URI,
-    response_type: "code",
-    scope: "openid profile.name profile.email",
+    response_type: "token",
+    scope: "profile.birthnumber profile.phonenumber profile.zoneinfo profile.gender openid profile.titles notification.claims_updated profile.birthplaceNationality profile.name profile.locale profile.idcards profile.maritalstatus profile.legalstatus profile.email profile.paymentAccounts profile.addresses profile.birthdate profile.updatedat",
     state,
     nonce: crypto.randomBytes(16).toString("hex"),
     acr_values: "loa3",
     prompt: "login",
+    display: "page",
   });
   return `${discovery.authorization_endpoint}?${params.toString()}`;
-}
-
-async function exchangeCodeForToken(code) {
-  const discovery = await getDiscovery();
-  const body = new URLSearchParams({
-    grant_type: "authorization_code",
-    code,
-    redirect_uri: process.env.BANKID_REDIRECT_URI,
-    client_id: process.env.BANKID_CLIENT_ID,
-    client_secret: process.env.BANKID_CLIENT_SECRET,
-  });
-  const res = await fetch(discovery.token_endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-    signal: AbortSignal.timeout(10000),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(`BankID token endpoint: ${data.error_description || data.error || res.status}`);
-  return data; // { access_token, id_token, token_type, expires_in, ... }
 }
 
 async function fetchUserInfo(accessToken) {
@@ -80,4 +61,4 @@ async function fetchUserInfo(accessToken) {
   return JSON.parse(text);
 }
 
-module.exports = { buildAuthorizeUrl, exchangeCodeForToken, fetchUserInfo };
+module.exports = { buildAuthorizeUrl, fetchUserInfo };

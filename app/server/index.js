@@ -39,14 +39,6 @@ async function buildApp(userDataDir) {
   const authRoutes = require("./routes/auth");
   app.use("/api/auth", authRoutes);
 
-  // BankID (live) redirect_uri je zaregistrovaný jako kořen domény, ne
-  // /api/auth/..., proto se OIDC callback musí obsloužit tady. Vercel na
-  // "/" volá tuto appku jen když je v query "code"/"error" (viz vercel.json);
-  // v běžném (desktop/dev) provozu se sem s těmito parametry nikdy nedostane.
-  app.get("/", (req, res, next) => {
-    if (req.query.code || req.query.error) return authRoutes.handleBankidOidcCallback(req, res);
-    next();
-  });
 
   app.use("/api", requireAuth);
   // Bezpečnostní zámek: routy níže dřív četly accounting_unit_id/unit
