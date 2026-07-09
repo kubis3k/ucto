@@ -2458,26 +2458,28 @@ async function renderReports() {
 
     <div class="two-col">
       <div class="panel">
-        <h2>Rozvaha (zjednodušený rozsah)</h2>
+        <h2>Rozvaha (zjednodušený rozsah dle vyhl. 500/2002 Sb.)</h2>
         <div class="table-wrap"><table>
-          <thead><tr><th>Strana</th><th>Účet</th><th>Název</th><th class="num">Zůstatek</th></tr></thead>
-          <tbody>${rozvaha.polozky.map((p) => `<tr><td>${p.strana}</td><td class="mono">${esc(p.account_number)}</td><td>${esc(p.account_name)}</td><td class="num">${fmtMoney(p.zustatek)}</td></tr>`).join("")}</tbody>
+          <thead><tr><th>Strana</th><th>Řádek</th><th>Položka</th><th class="num">Částka</th></tr></thead>
+          <tbody>${rozvaha.polozky.map((p) => `<tr><td>${esc(p.strana)}</td><td class="mono">${esc(p.code)}</td><td>${esc(p.label)}</td><td class="num">${fmtMoney(p.castka)}</td></tr>`).join("")}</tbody>
           <tfoot><tr><td colspan="3"><strong>AKTIVA / PASIVA CELKEM</strong></td><td class="num"><strong>${fmtMoney(rozvaha.kontrola.aktiva_celkem)} / ${fmtMoney(rozvaha.kontrola.pasiva_celkem)}</strong></td></tr></tfoot>
         </table></div>
         <p style="margin-top:12px;color:${Math.abs(rozvaha.kontrola.rozdil) < 0.01 ? 'var(--green)' : 'var(--red)'}">
           ${Math.abs(rozvaha.kontrola.rozdil) < 0.01 ? "✓ Rozvaha je vyrovnaná (AKTIVA = PASIVA)." : `⚠ Rozdíl AKTIVA-PASIVA: ${fmtMoney(rozvaha.kontrola.rozdil)}`}
         </p>
+        <p class="text-dim" style="margin-top:8px;font-size:11.5px">Mapování účtů na řádky výkazu je návrh dle vyhlášky — před oficiálním podáním nechte potvrdit účetní firmou.</p>
       </div>
       <div class="panel">
-        <h2>Výsledovka (zjednodušený rozsah)</h2>
+        <h2>Výsledovka (zjednodušený rozsah dle vyhl. 500/2002 Sb.)</h2>
         ${vysledovka ? `
           <div class="table-wrap"><table>
-            <thead><tr><th>Druh</th><th>Účet</th><th>Název</th><th class="num">Částka</th></tr></thead>
-            <tbody>${vysledovka.polozky.map((p) => `<tr><td>${p.druh}</td><td class="mono">${esc(p.account_number)}</td><td>${esc(p.account_name)}</td><td class="num">${fmtMoney(p.castka)}</td></tr>`).join("")}</tbody>
+            <thead><tr><th>Řádek</th><th>Položka</th><th class="num">Částka</th></tr></thead>
+            <tbody>${vysledovka.polozky.map((p) => `<tr${p.druh === "SUM" ? ' style="font-weight:600;border-top:1px solid var(--border-strong)"' : ""}><td class="mono">${esc(p.code)}</td><td>${esc(p.label)}</td><td class="num">${fmtMoney(p.castka)}</td></tr>`).join("")}</tbody>
           </table></div>
           <p style="margin-top:12px;font-weight:600;color:${vysledovka.vysledek_hospodareni >= 0 ? 'var(--green)' : 'var(--red)'}">
             Výsledek hospodaření: ${fmtMoney(vysledovka.vysledek_hospodareni)}
           </p>
+          <p class="text-dim" style="margin-top:8px;font-size:11.5px">Mapování účtů na řádky výkazu je návrh dle vyhlášky — před oficiálním podáním nechte potvrdit účetní firmou.</p>
         ` : `<div class="empty-state">Nejprve vyberte účetní období.</div>`}
       </div>
     </div>

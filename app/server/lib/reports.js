@@ -3,6 +3,11 @@
 // Rozvaha, Výsledovka, sledování obratu pro DPH limit) do JS/SQLite.
 // =====================================================================
 const store = require("../db");
+const {
+  ROZVAHA_ROWS, ACCOUNT_TO_ROZVAHA_ROW,
+  VYSLEDOVKA_ROWS, ACCOUNT_TO_VYSLEDOVKA_ROW,
+  resolveRow,
+} = require("./statementMapping");
 
 async function accountNaturalBalance(accountId, asOfDate) {
   const acc = await store.get(`SELECT account_type FROM chart_of_accounts WHERE id = ?`, [accountId]);
@@ -50,7 +55,9 @@ async function hlavniKniha(unitId, asOfDate) {
   });
 }
 
-// ROZVAHA (zjednodušený rozsah — mikro účetní jednotka)
+// ROZVAHA (zjednodušený rozsah — mikro účetní jednotka, agregováno podle
+// vyhlášky č. 500/2002 Sb., příloha č. 1 — viz lib/statementMapping.js
+// pro mapu účet->řádek a právní upozornění o nutném ověření účetní firmou).
 async function rozvaha(unitId, asOfDate) {
   const accounts = await store.all(
     `SELECT id, account_class, account_number, name, account_type
@@ -60,25 +67,68 @@ async function rozvaha(unitId, asOfDate) {
      ORDER BY account_type DESC, account_number`,
     [unitId]
   );
-  const polozky = [];
+
+  // Zůstatky za jednotlivé účty (surová data — NEZÁVISLÉ na mapování řádků,
+  // aby kontrola AKTIVA=PASIVA fungovala i kdyby v mapě byla chyba/mezera).
+  const detail = [];
   for (const a of accounts) {
-    polozky.push({
+    detail.push({
       strana: a.account_type === "rozvahovy_aktivni" ? "AKTIVA" : "PASIVA",
-      account_class: a.account_class,
       account_number: a.account_number,
       account_name: a.name,
       zustatek: await accountNaturalBalance(a.id, asOfDate),
     });
   }
-  const aktiva = polozky.filter((p) => p.strana === "AKTIVA").reduce((s, p) => s + p.zustatek, 0);
-  const pasiva = polozky.filter((p) => p.strana === "PASIVA").reduce((s, p) => s + p.zustatek, 0);
-  return { polozky, kontrola: { aktiva_celkem: aktiva, pasiva_celkem: pasiva, rozdil: aktiva - pasiva } };
+  let aktiva_celkem = detail.filter((p) => p.strana === "AKTIVA").reduce((s, p) => s + p.zustatek, 0);
+  let pasiva_celkem = detail.filter((p) => p.strana === "PASIVA").reduce((s, p) => s + p.zustatek, 0);
+
+  // Agregace do oficiálních řádků výkazu.
+  const soucty = {};
+  for (const d of detail) {
+    const rowCode = resolveRow(d.account_number, ACCOUNT_TO_ROZVAHA_ROW) || (d.strana === "AKTIVA" ? "AKTIVA.X" : "PASIVA.X");
+    soucty[rowCode] = (soucty[rowCode] || 0) + d.zustatek;
+  }
+
+  // A.V. "Výsledek hospodaření běžného účetního období" — dokud neproběhne
+  // roční uzávěrka (§ 29-30 ZoÚ, závěrkové účty 701/702/710), zisk/ztráta
+  // BĚŽNÉHO období nejsou promítnuty žádným zápisem do vlastního kapitálu
+  // (posting/postings.js "close" jen mění status období, nezaúčtovává).
+  // Interní/průběžná rozvaha proto řádek A.V. dopočítá živě z výsledovky
+  // za období pokrývající asOfDate — to je stejný postup, jaký by "ručně"
+  // udělal účetní u nezávěrkové rozvahy v průběhu roku. Uzavřené minulé
+  // roky, které NEBYLY promítnuty do 428/429 zápisem, jsou mimo rozsah
+  // tohoto úkolu (samostatný problém — automatizace roční uzávěrky).
+  const currentPeriod = await store.get(
+    `SELECT id, start_date, end_date FROM accounting_period
+     WHERE accounting_unit_id = ? AND start_date <= ? AND end_date >= ? ORDER BY fiscal_year DESC LIMIT 1`,
+    [unitId, asOfDate, asOfDate]
+  );
+  if (currentPeriod) {
+    const { vysledek_hospodareni } = await vysledovka(unitId, currentPeriod.id, asOfDate);
+    soucty["A.V."] = (soucty["A.V."] || 0) + vysledek_hospodareni;
+    pasiva_celkem += vysledek_hospodareni;
+  }
+
+  const polozky = ROZVAHA_ROWS
+    .map((r) => ({ strana: r.strana, code: r.code, label: r.label, castka: soucty[r.code] || 0 }))
+    .filter((p) => p.castka !== 0 || !p.code.endsWith(".X")); // "Nezařazeno" se zobrazí, jen když v ní něco je
+
+  return {
+    polozky,
+    detail, // účet-po-účtu podklad pro audit/kontrolu mapování — NENÍ v CSV exportu
+    kontrola: { aktiva_celkem, pasiva_celkem, rozdil: aktiva_celkem - pasiva_celkem },
+  };
 }
 
-// VÝSLEDOVKA za účetní období — zjednodušený rozsah
-async function vysledovka(unitId, periodId) {
+// VÝSLEDOVKA za účetní období — zjednodušený rozsah, druhové členění podle
+// vyhlášky č. 500/2002 Sb., příloha č. 2 (viz lib/statementMapping.js).
+// `asOfDate` (nepovinné) omezí konec rozsahu na kratší datum než konec
+// období — používá rozvaha() pro živý dopočet průběžného výsledku
+// hospodaření k libovolnému dni v rámci otevřeného období.
+async function vysledovka(unitId, periodId, asOfDate) {
   const period = await store.get(`SELECT start_date, end_date FROM accounting_period WHERE id = ?`, [periodId]);
   if (!period) throw new Error("Účetní období neexistuje.");
+  const rangeEnd = asOfDate && asOfDate < period.end_date ? asOfDate : period.end_date;
 
   const rows = await store.all(
     `SELECT coa.account_type, coa.account_number, coa.name,
@@ -93,17 +143,40 @@ async function vysledovka(unitId, periodId) {
        AND p.posting_date BETWEEN ? AND ? AND coa.parent_account_id IS NULL
      GROUP BY coa.account_type, coa.account_number, coa.name
      ORDER BY coa.account_type, coa.account_number`,
-    [unitId, period.start_date, period.end_date]
+    [unitId, period.start_date, rangeEnd]
   );
-  const polozky = rows.map((r) => ({
+  const detail = rows.map((r) => ({
     druh: r.account_type === "vysledkovy_naklad" ? "NÁKLAD" : "VÝNOS",
     account_number: r.account_number,
     account_name: r.name,
     castka: r.castka,
   }));
-  const vynosy = polozky.filter((p) => p.druh === "VÝNOS").reduce((s, p) => s + p.castka, 0);
-  const naklady = polozky.filter((p) => p.druh === "NÁKLAD").reduce((s, p) => s + p.castka, 0);
-  return { polozky, vysledek_hospodareni: vynosy - naklady };
+
+  const soucty = {};
+  let nezarazeno = 0;
+  for (const d of detail) {
+    const rowCode = resolveRow(d.account_number, ACCOUNT_TO_VYSLEDOVKA_ROW);
+    if (!rowCode) { nezarazeno += d.druh === "NÁKLAD" ? d.castka : -d.castka; continue; }
+    soucty[rowCode] = (soucty[rowCode] || 0) + d.castka;
+  }
+
+  // Dopočítat řádky v pořadí (formula-řádky potřebují už spočtené předchozí).
+  const values = {};
+  const polozky = [];
+  for (const r of VYSLEDOVKA_ROWS) {
+    const castka = r.druh === "SUM" ? r.formula(values) : (soucty[r.code] || 0);
+    values[r.code] = castka;
+    polozky.push({ code: r.code, label: r.label, druh: r.druh, castka });
+  }
+  if (Math.abs(nezarazeno) > 0.01) {
+    polozky.push({ code: "X.", label: "Nezařazeno (doplnit mapu)", druh: "NÁKLAD", castka: nezarazeno });
+  }
+
+  return {
+    polozky,
+    detail,
+    vysledek_hospodareni: values["***"] - nezarazeno,
+  };
 }
 
 // Sledování obratu pro DPH limit (2 mil. Kč / 12 po sobě jdoucích měsíců)
