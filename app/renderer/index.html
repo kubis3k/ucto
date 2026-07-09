@@ -2,6 +2,11 @@
 <html lang="cs">
 <head>
 <meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="theme-color" content="#12151d" />
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' http://127.0.0.1:* http://localhost:*; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data:;" />
 <title>Globaal Elevate — Účetní systém</title>
 <script>
@@ -27,6 +32,9 @@
       window.ucetnictvi = { apiBase: location.port === "5173" ? "http://127.0.0.1:4000/api" : "/api" };
     }
   </script>
+  <div id="splashScreen" class="splash-screen">
+    <div class="splash-logo-plate"><img src="assets/logo.png" alt="Globaal Elevate Production" class="splash-logo" /></div>
+  </div>
   <div id="authScreen" class="auth-screen hidden"></div>
   <div id="app" class="hidden">
     <header class="topbar">
@@ -52,6 +60,10 @@
     <main class="content">
       <div id="view" class="view"></div>
     </main>
+    <nav id="bottomNav" class="bottom-nav"></nav>
+    <div id="bottomSheetBackdrop" class="bottom-sheet-backdrop hidden" data-action="close-bottom-sheet">
+      <div class="bottom-sheet" id="bottomSheet"></div>
+    </div>
   </div>
   <div id="toast" class="toast hidden"></div>
   <script src="app.js"></script>

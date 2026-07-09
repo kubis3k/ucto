@@ -189,7 +189,12 @@ async function readBrandingFiles(form) {
   return out;
 }
 
+function hideSplash() {
+  document.getElementById("splashScreen")?.classList.add("hidden");
+}
+
 function renderAuthScreen() {
+  hideSplash();
   const screen = document.getElementById("authScreen");
   screen.classList.remove("hidden");
   document.getElementById("app").classList.add("hidden");
@@ -381,6 +386,7 @@ async function handleAuthBankidCallback(form) {
 }
 
 function renderAcceptInviteScreen(token) {
+  hideSplash();
   const screen = document.getElementById("authScreen");
   screen.classList.remove("hidden");
   document.getElementById("app").classList.add("hidden");
@@ -530,6 +536,51 @@ function renderNav(active) {
   }).join("");
 }
 
+// ---------------------------------------------------------------------
+// Spodní navigace (mobil/iOS) — 4 hlavní položky + "Více" otevírající
+// bottom sheet se všemi ~19 položkami seskupenými jako v horním menu.
+// Skrytá na desktopu přes CSS media query, žádná JS detekce zařízení.
+// ---------------------------------------------------------------------
+const BOTTOM_NAV_ITEMS = [
+  { id: "dashboard", label: "Přehled" },
+  { id: "documents", label: "Doklady" },
+  { id: "nabidky", label: "Fakturace" },
+  { id: "bank", label: "Banka" },
+];
+const MORE_ICON = '<path d="M12 12h.01M19 12h.01M5 12h.01"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>';
+
+function renderBottomNav(active) {
+  const nav = document.getElementById("bottomNav");
+  if (!nav) return;
+  nav.innerHTML = BOTTOM_NAV_ITEMS.map((it) => `
+    <button type="button" class="bottom-nav-item ${it.id === active ? "active" : ""}" data-nav="${it.id}">
+      <span class="bottom-nav-icon">${navIcon(it.id)}</span>
+      <span class="bottom-nav-label">${it.label}</span>
+    </button>`).join("") + `
+    <button type="button" class="bottom-nav-item" data-action="open-bottom-sheet">
+      <span class="bottom-nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${MORE_ICON}</svg></span>
+      <span class="bottom-nav-label">Více</span>
+    </button>`;
+}
+
+function renderBottomSheet(active) {
+  const sheet = document.getElementById("bottomSheet");
+  if (!sheet) return;
+  sheet.innerHTML = `
+    <div class="bottom-sheet-handle"></div>
+    <div class="bottom-sheet-scroll">
+      ${NAV.map((g) => `
+        <div class="bottom-sheet-group-label">${esc(g.group)}</div>
+        ${g.items.map((it) => `
+          <div class="bottom-sheet-item ${it.id === active ? "active" : ""}" data-nav="${it.id}">
+            <span class="nav-icon">${navIcon(it.id)}</span><span>${esc(it.label)}</span>
+          </div>`).join("")}
+      `).join("")}
+    </div>`;
+}
+function openBottomSheet() { document.getElementById("bottomSheetBackdrop")?.classList.remove("hidden"); }
+function closeBottomSheet() { document.getElementById("bottomSheetBackdrop")?.classList.add("hidden"); }
+
 const VIEWS = {
   dashboard: renderDashboard,
   documents: renderDocuments,
@@ -557,6 +608,8 @@ async function router() {
   const id = (location.hash.slice(1) || "dashboard").split("?")[0];
   const view = VIEWS[id] ? id : "dashboard";
   renderNav(view);
+  renderBottomNav(view);
+  renderBottomSheet(view);
   document.getElementById("pageTitle").textContent = TITLES[view];
   document.getElementById("topbarActions").innerHTML = "";
   document.getElementById("view").innerHTML = `<div class="empty-state">Načítám…</div>`;
@@ -720,6 +773,7 @@ function renderCashflowChart(monthly) {
   const yAt = (v) => chartH - (v / max) * (chartH - 10);
 
   const pathFor = (key) => monthly.map((m, i) => `${i === 0 ? "M" : "L"} ${xAt(i).toFixed(1)} ${yAt(m[key]).toFixed(1)}`).join(" ");
+  const areaFor = (key) => `${pathFor(key)} L ${xAt(n - 1).toFixed(1)} ${chartH} L ${xAt(0).toFixed(1)} ${chartH} Z`;
   const dotsFor = (key, color) => monthly.map((m, i) => `<circle cx="${xAt(i).toFixed(1)}" cy="${yAt(m[key]).toFixed(1)}" r="3" fill="${color}" />`).join("");
 
   const labels = monthly.map((m, i) => {
@@ -741,7 +795,19 @@ function renderCashflowChart(monthly) {
   return `
     <div class="cashflow-chart-wrap">
       <svg viewBox="0 0 ${chartW} ${chartH + labelH}" class="cashflow-chart" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="cfGradIncome" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--green)" stop-opacity="0.32" />
+            <stop offset="100%" stop-color="var(--green)" stop-opacity="0" />
+          </linearGradient>
+          <linearGradient id="cfGradExpense" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--red)" stop-opacity="0.24" />
+            <stop offset="100%" stop-color="var(--red)" stop-opacity="0" />
+          </linearGradient>
+        </defs>
         <line x1="0" y1="${chartH}" x2="${chartW}" y2="${chartH}" stroke="var(--border)" stroke-width="1" />
+        <path d="${areaFor("income")}" fill="url(#cfGradIncome)" stroke="none" />
+        <path d="${areaFor("expense")}" fill="url(#cfGradExpense)" stroke="none" />
         <path d="${pathFor("income")}" fill="none" stroke="var(--green)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
         <path d="${pathFor("expense")}" fill="none" stroke="var(--red)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
         ${dotsFor("income", "var(--green)")}
@@ -2801,6 +2867,7 @@ document.addEventListener("click", async (e) => {
   const navItem = e.target.closest("[data-nav]");
   if (navItem) {
     document.querySelectorAll(".nav-group.open").forEach((g) => g.classList.remove("open"));
+    closeBottomSheet();
     location.hash = "#" + navItem.dataset.nav;
     return;
   }
@@ -2808,6 +2875,9 @@ document.addEventListener("click", async (e) => {
   const action = e.target.closest("[data-action]")?.dataset.action;
   if (!action) return;
   const id = e.target.closest("[data-id]")?.dataset.id;
+
+  if (action === "open-bottom-sheet") { openBottomSheet(); return; }
+  if (action === "close-bottom-sheet") { if (e.target.id === "bottomSheetBackdrop") closeBottomSheet(); return; }
 
   try {
     switch (action) {
@@ -3027,6 +3097,7 @@ async function checkAuthAndStart() {
     return;
   }
   STATE.authUser = user;
+  hideSplash();
   document.getElementById("authScreen").classList.add("hidden");
   document.getElementById("app").classList.remove("hidden");
   try {
