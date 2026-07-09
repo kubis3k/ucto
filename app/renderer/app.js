@@ -89,65 +89,53 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 // =====================================================================
 let AUTH_TAB = "login";
 
-// Podpisový prvek přihlašovací obrazovky: kompaktní ROZVAHA, která vždy
-// „sedí" — součet aktiv = součet pasiv. Vtěluje podstatu podvojného
-// účetnictví (MD = D) a používá reálný kontext firmy. Po načtení se
-// číslice sečtou a oba součty se zamknou na shodnou hodnotu (viz
-// animateBalanceSheet). Nahrazuje dřívější ledger ticker.
-const BALANCE_SHEET = {
-  date: "30. 6. 2026",
-  aktiva: [
-    { code: "221", name: "Bankovní účet", val: 842000 },
-    { code: "311", name: "Odběratelé", val: 318000 },
-    { code: "022", name: "Hmotný majetek", val: 80000 },
-  ],
-  pasiva: [
-    { code: "321", name: "Dodavatelé", val: 214000 },
-    { code: "411", name: "Základní kapitál", val: 200000 },
-    { code: "431", name: "Výsledek hospodaření", val: 826000 },
-  ],
-};
-function bsRows(side) {
-  return BALANCE_SHEET[side].map((r) => `
-    <div class="bs-row">
-      <span class="bs-code">${r.code}</span>
-      <span class="bs-name">${esc(r.name)}</span>
-      <span class="bs-fig" data-val="${r.val}">0</span>
-    </div>`).join("");
-}
-function renderBalanceSheet() {
-  const total = BALANCE_SHEET.aktiva.reduce((s, r) => s + r.val, 0);
+// Podpisový prvek přihlašovací obrazovky: rotující poučky o daních a
+// účetnictví (know-how), skleněná karta s tečkovým indikátorem, pauza
+// při hoveru. Nahrazuje dřívější ukázkovou rozvahu.
+const TAX_TIPS = [
+  { tag: "DPH", text: "Přiznání k DPH i kontrolní hlášení podávejte do 25. dne následujícího měsíce — jinak hrozí pokuta už od 500 Kč." },
+  { tag: "Archivace", text: "Účetní záznamy se uchovávají 5 let, doklady rozhodné pro DPH pak 10 let od konce příslušného zdaňovacího období." },
+  { tag: "Majetek", text: "Hmotný majetek do 80 000 Kč můžete zaúčtovat přímo do nákladů — nemusí se odepisovat jako dlouhodobý majetek." },
+  { tag: "Opravné doklady", text: "Opravný daňový doklad musí odkazovat na původní doklad a uvádět důvod opravy (§ 45 zákona o DPH)." },
+  { tag: "Rezervy", text: "Rezerva je daňově uznatelná jen podle zákona o rezervách — jinak jde jen o účetní rezervu bez daňového efektu." },
+  { tag: "Reverse charge", text: "U přenesené daňové povinnosti fakturujete bez DPH na výstupu — daň odvádí odběratel ve svém přiznání." },
+];
+let taxTipIndex = 0, taxTipTimer = null;
+function renderTaxTips() {
   return `
-    <div class="bs-card" role="img" aria-label="Ukázková rozvaha — aktiva se rovnají pasivům, ${total.toLocaleString("cs-CZ")} Kč">
-      <div class="bs-head"><span>Rozvaha</span><span class="bs-date">k ${BALANCE_SHEET.date}</span></div>
-      <div class="bs-cols">
-        <div class="bs-col"><div class="bs-col-label">Aktiva</div>${bsRows("aktiva")}</div>
-        <div class="bs-col"><div class="bs-col-label">Pasiva</div>${bsRows("pasiva")}</div>
+    <div class="tax-tip-card" id="taxTipCard" role="group" aria-label="Poučky o daních a účetnictví">
+      <div class="tax-tip-head">
+        <span class="tax-tip-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 6v6c0 5 4 8.5 9 10 5-1.5 9-5 9-10V6l-9-4Z"/><path d="M9.5 12.5 11 14l3.5-4"/></svg>
+        </span>
+        <span>Věděli jste?</span>
       </div>
-      <div class="bs-total">
-        <span class="bs-total-side"><span class="bs-total-cap">Σ Aktiva</span><span class="bs-fig bs-total-fig" data-val="${total}">0</span></span>
-        <span class="bs-eq" aria-hidden="true">=</span>
-        <span class="bs-total-side"><span class="bs-total-cap">Σ Pasiva</span><span class="bs-fig bs-total-fig" data-val="${total}">0</span></span>
+      <div class="tax-tip-body" id="taxTipBody"></div>
+      <div class="tax-tip-dots" id="taxTipDots">
+        ${TAX_TIPS.map((_, i) => `<span class="tax-tip-dot${i === 0 ? " active" : ""}" data-tip-dot="${i}"></span>`).join("")}
       </div>
-      <div class="bs-balanced" id="bsBalanced">Aktiva = Pasiva · knihy sedí</div>
     </div>`;
 }
-function animateBalanceSheet() {
-  const figs = [...document.querySelectorAll(".bs-fig")];
-  if (!figs.length) return;
-  const done = () => document.getElementById("bsBalanced")?.classList.add("show");
-  const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (reduce) {
-    figs.forEach((f) => { f.textContent = Number(f.dataset.val).toLocaleString("cs-CZ"); });
-    done(); return;
-  }
-  const dur = 900, t0 = performance.now(), ease = (t) => 1 - Math.pow(1 - t, 3);
-  function frame(now) {
-    const p = Math.min(1, (now - t0) / dur), k = ease(p);
-    figs.forEach((f) => { f.textContent = Math.round(Number(f.dataset.val) * k).toLocaleString("cs-CZ"); });
-    if (p < 1) requestAnimationFrame(frame); else done();
-  }
-  requestAnimationFrame(frame);
+function paintTaxTip() {
+  const tip = TAX_TIPS[taxTipIndex];
+  const body = document.getElementById("taxTipBody");
+  if (!body) return;
+  body.classList.remove("in");
+  body.innerHTML = `<span class="tax-tip-tag">${esc(tip.tag)}</span><p>${esc(tip.text)}</p>`;
+  requestAnimationFrame(() => body.classList.add("in"));
+  document.querySelectorAll("[data-tip-dot]").forEach((d) => d.classList.toggle("active", Number(d.dataset.tipDot) === taxTipIndex));
+}
+function startTaxTipsRotation() {
+  paintTaxTip();
+  const card = document.getElementById("taxTipCard");
+  if (!card) return;
+  const advance = () => { taxTipIndex = (taxTipIndex + 1) % TAX_TIPS.length; paintTaxTip(); };
+  const play = () => { stop(); taxTipTimer = setInterval(advance, 7000); };
+  const stop = () => { if (taxTipTimer) clearInterval(taxTipTimer); };
+  card.addEventListener("mouseenter", stop);
+  card.addEventListener("mouseleave", play);
+  card.querySelectorAll("[data-tip-dot]").forEach((dot) => dot.addEventListener("click", () => { taxTipIndex = Number(dot.dataset.tipDot); paintTaxTip(); play(); }));
+  play();
 }
 
 const EYE_PATHS = '<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"/><circle cx="12" cy="12" r="3"/>';
@@ -185,7 +173,7 @@ function renderAuthScreen() {
           <h2>Nezávislé účetnictví.<br><em>Knihy, které vždy sedí.</em></h2>
           <p>Doklady, účetní deník, DPH i závěrka na jednom místě — průkazně a dle zákona, bez cizího softwaru.</p>
         </div>
-        ${renderBalanceSheet()}
+        ${renderTaxTips()}
       </div>
       <div class="auth-brand-footer">
         <span class="auth-legal">Vedeno dle zákona č. 563/1991 Sb., o účetnictví</span>
@@ -210,7 +198,7 @@ function renderAuthScreen() {
   `;
   renderAuthTabBody();
   positionAuthTabIndicator();
-  animateBalanceSheet();
+  startTaxTipsRotation();
   refreshThemeIcons();
 }
 

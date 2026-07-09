@@ -90,10 +90,21 @@
 html, body { height: 100%; margin: 0; }
 body {
   font-family: var(--font-ui);
-  background: var(--bg);
+  background:
+    radial-gradient(50% 45% at 8% 0%, rgba(77, 124, 254, 0.10), transparent 62%),
+    radial-gradient(45% 40% at 100% 0%, rgba(124, 108, 255, 0.08), transparent 60%),
+    radial-gradient(50% 45% at 90% 100%, rgba(38, 158, 168, 0.07), transparent 62%),
+    var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+:root[data-theme="light"] body {
+  background:
+    radial-gradient(50% 45% at 8% 0%, rgba(77, 124, 254, 0.12), transparent 62%),
+    radial-gradient(45% 40% at 100% 0%, rgba(139, 122, 255, 0.10), transparent 60%),
+    radial-gradient(50% 45% at 90% 100%, rgba(45, 178, 188, 0.09), transparent 62%),
+    var(--bg);
 }
 
 /* Tabulární číslice všude, kde jde o čísla/peníze — brání poskakování sloupců */
@@ -115,7 +126,8 @@ body {
 .sidebar {
   width: 244px;
   flex-shrink: 0;
-  background: var(--surface);
+  background: rgba(127, 127, 127, 0.06);
+  backdrop-filter: blur(20px) saturate(1.2); -webkit-backdrop-filter: blur(20px) saturate(1.2);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -174,7 +186,7 @@ body {
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 18px 30px; border-bottom: 1px solid var(--border);
-  background: var(--topbar-bg); backdrop-filter: blur(8px);
+  background: var(--topbar-bg); backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2);
   position: sticky; top: 0; z-index: 5;
 }
 .topbar h1 { font-size: 19px; margin: 0; font-weight: 650; letter-spacing: -0.02em; }
@@ -198,7 +210,9 @@ body {
 /* ---------------------------------------------------------------- KPI cards */
 .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 18px; }
 .kpi {
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  background: rgba(127, 127, 127, 0.07);
+  backdrop-filter: blur(16px) saturate(1.25); -webkit-backdrop-filter: blur(16px) saturate(1.25);
+  border: 1px solid var(--border); border-radius: var(--radius);
   padding: 18px 20px; position: relative; overflow: hidden;
   transition: border-color 0.15s ease;
 }
@@ -368,41 +382,34 @@ label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 
 .auth-hero h2 em { font-style: normal; font-weight: 600; color: var(--ledger-gold); }
 .auth-hero p { color: var(--text-dim); font-size: 13.5px; line-height: 1.65; margin: 16px 0 0; max-width: 340px; }
 
-/* --- Podpisová rozvaha (aktiva = pasiva), sklo --- */
-.bs-card {
-  position: relative; margin-top: 34px; border-radius: 14px; padding: 16px 18px 14px;
+/* --- Poučky o daních a účetnictví (rotující), sklo --- */
+.tax-tip-card {
+  position: relative; margin-top: 34px; border-radius: 14px; padding: 18px 20px 16px; min-height: 148px;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.12);
   backdrop-filter: blur(16px) saturate(1.3); -webkit-backdrop-filter: blur(16px) saturate(1.3);
   box-shadow: var(--shadow);
+  display: flex; flex-direction: column;
 }
-:root[data-theme="light"] .bs-card { background: rgba(255, 255, 255, 0.6); border-color: rgba(255, 255, 255, 0.8); }
-.bs-head {
-  display: flex; justify-content: space-between; align-items: baseline;
+:root[data-theme="light"] .tax-tip-card { background: rgba(255, 255, 255, 0.6); border-color: rgba(255, 255, 255, 0.8); }
+.tax-tip-head {
+  display: flex; align-items: center; gap: 8px;
   font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.14em; color: var(--text-dim);
-  font-weight: 600; padding-bottom: 11px; margin-bottom: 11px; border-bottom: 1px solid var(--border);
+  font-weight: 600; padding-bottom: 11px; margin-bottom: 13px; border-bottom: 1px solid var(--border);
 }
-.bs-head .bs-date { color: var(--text-faint); letter-spacing: 0.08em; font-family: var(--font-mono); }
-.bs-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-.bs-col-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ledger-gold); font-weight: 600; margin-bottom: 8px; }
-.bs-row { display: grid; grid-template-columns: auto 1fr auto; align-items: baseline; gap: 8px; padding: 3.5px 0; }
-.bs-code { font-family: var(--font-mono); font-size: 11px; color: var(--ledger-gold); opacity: 0.9; }
-.bs-name { font-size: 11.5px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bs-fig { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); font-variant-numeric: tabular-nums; text-align: right; }
-.bs-total {
-  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 14px;
-  margin-top: 11px; padding-top: 12px; border-top: 1px solid var(--border);
+.tax-tip-icon { display: inline-flex; color: var(--ledger-gold); }
+.tax-tip-icon svg { width: 15px; height: 15px; }
+.tax-tip-body { flex: 1; opacity: 0; transform: translateY(4px); transition: opacity 0.35s ease, transform 0.35s ease; }
+.tax-tip-body.in { opacity: 1; transform: none; }
+.tax-tip-tag {
+  display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600;
+  color: var(--ledger-gold); margin-bottom: 8px;
 }
-.bs-total-side { display: flex; flex-direction: column; gap: 2px; }
-.bs-total-cap { font-size: 9px; text-transform: uppercase; letter-spacing: 0.11em; color: var(--text-faint); }
-.bs-total-fig { font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--ledger-gold); }
-.bs-eq { font-family: var(--font-mono); font-size: 17px; color: var(--text-faint); text-align: center; }
-.bs-balanced {
-  margin-top: 12px; font-size: 11px; color: var(--green); display: flex; align-items: center; gap: 6px;
-  opacity: 0; transform: translateY(4px); transition: opacity 0.4s ease, transform 0.4s ease;
-}
-.bs-balanced::before { content: "✓"; font-weight: 700; }
-.bs-balanced.show { opacity: 1; transform: none; }
+.tax-tip-body p { margin: 0; font-size: 13px; line-height: 1.6; color: var(--text); }
+.tax-tip-dots { display: flex; gap: 6px; margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--border); }
+.tax-tip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-faint); opacity: 0.4; cursor: pointer; transition: opacity 0.2s ease, background 0.2s ease; padding: 0; border: none; }
+.tax-tip-dot:hover { opacity: 0.7; }
+.tax-tip-dot.active { background: var(--ledger-gold); opacity: 1; }
 
 .auth-brand-footer {
   position: relative; z-index: 1; display: flex; flex-direction: column; gap: 8px;
