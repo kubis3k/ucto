@@ -41,7 +41,8 @@
       "main.js",
       "preload.js",
       "renderer/**/*",
-      "desktop-config.json"
+      "desktop-config.json",
+      "!node_modules/**/*"
     ],
     "win": {
       "target": [
