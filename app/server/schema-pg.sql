@@ -272,9 +272,43 @@ CREATE TABLE IF NOT EXISTS bank_statement_line (
     variable_symbol     TEXT,
     matched_document_id INTEGER REFERENCES document(id),
     posting_id          INTEGER REFERENCES posting(id),
+    external_ref        TEXT,
     imported_at         TEXT NOT NULL DEFAULT (now()::text)
 );
 ALTER TABLE bank_statement_line ADD COLUMN IF NOT EXISTS posting_id INTEGER REFERENCES posting(id);
+ALTER TABLE bank_statement_line ADD COLUMN IF NOT EXISTS external_ref TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_statement_line_external_ref
+    ON bank_statement_line(accounting_unit_id, external_ref) WHERE external_ref IS NOT NULL;
+
+-- ---------------------------------------------------------------------
+-- Párovací e-mailová adresa banky (Fakturoid-styl) — viz schema.sql pro
+-- vysvětlení, 1:1 překlad.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS bank_inbound_mailbox (
+    id                  SERIAL PRIMARY KEY,
+    accounting_unit_id  INTEGER NOT NULL REFERENCES accounting_unit(id),
+    token               TEXT NOT NULL UNIQUE,
+    bank_account        TEXT NOT NULL,
+    created_at          TEXT NOT NULL DEFAULT (now()::text)
+);
+
+-- ---------------------------------------------------------------------
+-- Platby vydaných faktur přes Stripe Checkout — viz schema.sql pro
+-- vysvětlení, 1:1 překlad.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS invoice_payment (
+    id                      SERIAL PRIMARY KEY,
+    accounting_unit_id      INTEGER NOT NULL REFERENCES accounting_unit(id),
+    document_id             INTEGER NOT NULL UNIQUE REFERENCES document(id),
+    pay_token               TEXT NOT NULL UNIQUE,
+    status                  TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','paid','failed')),
+    stripe_session_id       TEXT,
+    stripe_payment_intent_id TEXT,
+    amount                  DOUBLE PRECISION,
+    currency                TEXT NOT NULL DEFAULT 'CZK',
+    paid_at                 TEXT,
+    created_at              TEXT NOT NULL DEFAULT (now()::text)
+);
 
 CREATE TABLE IF NOT EXISTS bank_category_rule (
     id                  SERIAL PRIMARY KEY,

@@ -295,7 +295,44 @@ CREATE TABLE IF NOT EXISTS bank_statement_line (
     variable_symbol     TEXT,
     matched_document_id INTEGER REFERENCES document(id),
     posting_id          INTEGER REFERENCES posting(id),
+    -- Idempotence pro pohyby z e-mailu (MessageID) / Stripe (payment_intent) —
+    -- viz lib/bankMovements.js createBankStatementLine a UNIQUE index níže
+    -- (přidán přes db-sqlite.js migrate(), SQLite nemá ADD COLUMN IF NOT EXISTS).
+    external_ref        TEXT,
     imported_at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ---------------------------------------------------------------------
+-- Párovací e-mailová adresa banky (Fakturoid-styl) — token = MailboxHash
+-- u Postmark Inbound, mapuje na firmu + bankovní účet, na který se pohyby
+-- z e-mailu připisují (routes/inbound-email.js).
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS bank_inbound_mailbox (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    accounting_unit_id  INTEGER NOT NULL REFERENCES accounting_unit(id),
+    token               TEXT NOT NULL UNIQUE,
+    bank_account        TEXT NOT NULL,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ---------------------------------------------------------------------
+-- Platby vydaných faktur přes Stripe Checkout (veřejná stránka /pay/:token).
+-- Samostatná tabulka, NE sloupce na document — document má silné triggery
+-- (period-lock/no-update/no-delete), platba má vlastní lifecycle nezávislý
+-- na účetním stavu dokladu (viz flow-state.md "ROZHODNUTÍ").
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS invoice_payment (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    accounting_unit_id      INTEGER NOT NULL REFERENCES accounting_unit(id),
+    document_id             INTEGER NOT NULL UNIQUE REFERENCES document(id),
+    pay_token               TEXT NOT NULL UNIQUE,
+    status                  TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','paid','failed')),
+    stripe_session_id       TEXT,
+    stripe_payment_intent_id TEXT,
+    amount                  REAL,
+    currency                TEXT NOT NULL DEFAULT 'CZK',
+    paid_at                 TEXT,
+    created_at              TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ---------------------------------------------------------------------

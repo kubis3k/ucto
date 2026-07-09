@@ -205,15 +205,22 @@ router.post("/:id/convert", async (req, res) => {
     const doc = await store.transaction(async () => {
       const year = new Date(today).getFullYear();
       const docNumber = await generateDocumentNumber(offer.accounting_unit_id, "faktura_vydana", year);
+      // FIX P2 (critic 2026-07-09): kopírovat currency z nabídky (jinak
+      // defaultuje na CZK bez ohledu na měnu nabídky) a due_date. Nabídka
+      // nemá vlastní koncept splatnosti — jako nejbližší dostupné datum
+      // použijeme valid_until (platnost nabídky); pokud chybí, due_date
+      // zůstane NULL (žádné jiné pole na offer k odvození nenÍ — zapsáno
+      // do agent-memory jako known-approximation, ne přesný přepočet).
+      // taxable_supply_date offer také nemá — necháváme NULL.
       await store.run(
         `INSERT INTO document
           (accounting_unit_id, doc_type, doc_number, contact_id, project_id, period_id,
-           issue_date, description, total_amount, is_vat_document, vat_base_amount, vat_rate, vat_amount,
+           issue_date, due_date, description, total_amount, currency, is_vat_document, vat_base_amount, vat_rate, vat_amount,
            responsible_user_id)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [offer.accounting_unit_id, "faktura_vydana", docNumber, offer.contact_id, offer.project_id, period.id,
-         today, offer.description || `Fakturace dle nabídky ${offer.offer_number}`, offer.total_amount,
-         offer.is_vat_document, offer.vat_base_amount, offer.vat_rate, offer.vat_amount, req.user.id]
+         today, offer.valid_until || null, offer.description || `Fakturace dle nabídky ${offer.offer_number}`, offer.total_amount,
+         offer.currency || "CZK", offer.is_vat_document, offer.vat_base_amount, offer.vat_rate, offer.vat_amount, req.user.id]
       );
       const docId = (await store.get("SELECT last_insert_rowid() AS id")).id;
       for (let i = 0; i < lines.length; i++) {

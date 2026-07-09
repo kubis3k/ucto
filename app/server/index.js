@@ -22,6 +22,13 @@ async function buildApp(userDataDir) {
   store.persist();
 
   const app = express();
+
+  // Stripe webhook MUSÍ mít raw body (podpis se verifikuje nad syrovým
+  // tělem) — mountnutý PŘED globálním express.json() níže, jinak by ho
+  // json() middleware parsoval dřív, než se dostane k routě (index.js
+  // INVARIANTY: webhook endpointy vlastní autentizace, ne requireAuth).
+  app.use("/api/stripe/webhook", express.raw({ type: "application/json" }), require("./routes/stripe").webhook);
+
   app.use(express.json());
 
   // Renderer se v Electronu načítá přes file:// (origin "null"), na webu je
@@ -42,6 +49,13 @@ async function buildApp(userDataDir) {
   // Cron endpoint (Vercel Cron) — vlastní CRON_SECRET autentizace, MUSÍ být
   // mountovaný před requireAuth, protože cron nemá uživatelskou session.
   app.use("/api/cron", require("./routes/cron"));
+
+  // Bankovní e-mail parsing (Postmark Inbound) a veřejná platební stránka —
+  // stejný vzor jako cron.js: VEŘEJNÉ (bez requireAuth), ale s vlastní
+  // autentizací/tokenem uvnitř routy (Basic Auth vs POSTMARK_INBOUND_TOKEN /
+  // pay_token vs invoice_payment). WEB-ONLY featury (viz flow-state.md).
+  app.use("/api/inbound", require("./routes/inbound-email"));
+  app.use("/pay", require("./routes/stripe").payPage);
 
   app.use("/api", requireAuth);
   // Bezpečnostní zámek: routy níže dřív četly accounting_unit_id/unit

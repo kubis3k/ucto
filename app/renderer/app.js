@@ -871,8 +871,10 @@ async function showDocumentDetail(id) {
       <div style="display:flex;gap:8px;align-items:center">
         <button class="secondary small" data-action="download-invoice-pdf" data-id="${doc.id}" data-doc-number="${esc(doc.doc_number)}">Stáhnout PDF</button>
         <button class="secondary small" data-action="open-send-invoice" data-id="${doc.id}">Odeslat e-mailem</button>
+        ${doc.status !== "stornovany" ? `<button class="secondary small" data-action="payment-link" data-id="${doc.id}">Odkaz na zaplacení</button>` : ""}
       </div>
       <div id="sendInvoiceBox"></div>
+      <div id="paymentLinkBox"></div>
     </div>` : ""}
     <div style="margin-top:18px">
       <div class="text-dim" style="font-size:12px;margin-bottom:6px">Přílohy (PDF, CSV)</div>
@@ -927,6 +929,28 @@ async function handleSendInvoiceEmail(form) {
     toast(`Faktura odeslána na ${result.to}.`);
     document.getElementById("sendInvoiceBox").innerHTML = "";
   } catch (err) { toast(err.message, "error"); }
+}
+
+// Vygeneruje/zobrazí trvalý odkaz na zaplacení faktury přes Stripe (veřejná
+// stránka /pay/:token). Odkaz se ukládá per faktura (opakovaný klik vrátí
+// stejný token) — ruční zobrazení/kopírování, VLOŽENÍ do PDF/e-mailu je
+// pozdější iterace.
+async function getPaymentLink(id) {
+  const box = document.getElementById("paymentLinkBox");
+  if (box) box.innerHTML = `<div class="text-dim" style="margin-top:8px">Vytvářím odkaz…</div>`;
+  try {
+    const { url } = await api("POST", `/documents/${id}/payment-link`, {});
+    if (box) {
+      box.innerHTML = `
+        <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+          <input type="text" readonly value="${esc(url)}" onclick="this.select()" style="flex:1" />
+          <button type="button" class="secondary small" data-action="copy-payment-link" data-url="${esc(url)}">Kopírovat</button>
+        </div>`;
+    }
+  } catch (err) {
+    if (box) box.innerHTML = `<div style="margin-top:8px;color:var(--danger,#c00)">${esc(err.message)}</div>`;
+    else toast(err.message, "error");
+  }
 }
 
 async function loadDocumentAttachments(docId) {
@@ -2411,6 +2435,7 @@ async function renderAuditLog() {
 // =====================================================================
 async function renderSettings() {
   const users = await api("GET", `/users?unit=${STATE.unit.id}`);
+  const mailbox = await api("GET", `/bank/inbound-mailbox?unit=${STATE.unit.id}`).catch(() => null);
   document.getElementById("view").innerHTML = `
     <div class="panel">
       <h2>Účetní jednotka</h2>
@@ -2461,6 +2486,21 @@ async function renderSettings() {
       </form>
       <div id="inviteResult" style="margin-top:12px"></div>
     </div>
+    <div class="panel">
+      <h2>Banka a párování</h2>
+      ${mailbox ? `
+        <p class="text-dim" style="margin-top:0">Přidejte tuto adresu do upozornění vaší banky (příchozí platby) — systém pak automaticky zaznamená platby jako bankovní pohyb a zkusí je spárovat s fakturou.</p>
+        ${mailbox.address
+          ? `<input type="text" readonly value="${esc(mailbox.address)}" onclick="this.select()" style="max-width:420px" />`
+          : `<p style="color:var(--danger,#c00)">Párovací token je vytvořen (účet ${esc(mailbox.bank_account)}), ale server ještě nemá nastavenou proměnnou POSTMARK_INBOUND_ADDRESS — adresu doplní správce nasazení.</p>`}
+      ` : `
+        <p class="text-dim" style="margin-top:0">Vygenerujte párovací e-mailovou adresu a přidejte ji do upozornění vaší banky (příchozí platby) — systém pak automaticky zaznamená platby jako bankovní pohyb a zkusí je spárovat s fakturou. Funguje jen na webovém nasazení.</p>
+        <form data-form="generate-bank-mailbox" class="form-grid" style="align-items:end">
+          <div><label>Číslo bankovního účtu (pro pohyby z e-mailu)</label><input type="text" name="bank_account" placeholder="123456789/0100" required /></div>
+          <div><button type="submit">Vygenerovat párovací adresu</button></div>
+        </form>
+      `}
+    </div>
   `;
 }
 
@@ -2494,6 +2534,14 @@ async function handleInviteColleague(form) {
     `<div class="text-dim" style="font-size:12.5px">Pozvánka vytvořena — pošlete kolegovi tento odkaz:</div>
      <input type="text" readonly value="${esc(fullUrl)}" onclick="this.select()" style="margin-top:4px" />`;
   form.reset();
+}
+
+async function handleGenerateBankMailbox(form) {
+  const fd = new FormData(form);
+  const body = Object.fromEntries(fd.entries());
+  await api("POST", "/bank/inbound-mailbox", body);
+  toast("Párovací adresa byla vygenerována.");
+  renderSettings();
 }
 
 // =====================================================================
@@ -2656,6 +2704,13 @@ document.addEventListener("click", async (e) => {
       case "load-qr": await loadDocumentQr(id); break;
       case "download-invoice-pdf": await downloadInvoicePdf(id, e.target.closest("[data-doc-number]").dataset.docNumber); break;
       case "open-send-invoice": openSendInvoiceForm(id); break;
+      case "payment-link": await getPaymentLink(id); break;
+      case "copy-payment-link": {
+        const url = e.target.closest("[data-url]").dataset.url;
+        try { await navigator.clipboard.writeText(url); toast("Odkaz zkopírován."); }
+        catch { toast("Kopírování se nezdařilo, zkopírujte odkaz ručně.", "error"); }
+        break;
+      }
       case "delete-template": {
         if (!confirm("Smazat předkontaci?")) break;
         await api("DELETE", `/templates/${id}`); toast("Předkontace smazána."); renderTemplates(); break;
@@ -2767,6 +2822,7 @@ document.addEventListener("submit", async (e) => {
       case "auth-bankid-callback": await handleAuthBankidCallback(e.target); break;
       case "accept-invite": await handleAcceptInvite(e.target); break;
       case "invite-colleague": await handleInviteColleague(e.target); break;
+      case "generate-bank-mailbox": await handleGenerateBankMailbox(e.target); break;
       case "save-price-item": await handleSavePriceItem(e.target); break;
       case "create-offer": await handleCreateOffer(e.target); break;
       case "send-offer-email": await handleSendOfferEmail(e.target); break;

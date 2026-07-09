@@ -1,9 +1,10 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const multer = require("multer");
 const store = require("../db");
-const { generateDocumentNumber, nextPostingNumber, writeAuditLog, assertPeriodOpen } = require("../lib/core");
+const { generateDocumentNumber, nextPostingNumber, writeAuditLog, assertPeriodOpen, stornoPosting } = require("../lib/core");
 const qrplatba = require("../lib/qrplatba");
 const invoiceScan = require("../lib/invoiceScan");
 const { buildInvoicePdf } = require("../lib/invoicePdf");
@@ -136,8 +137,25 @@ router.post("/:id/storno", async (req, res) => {
     if (before.status === "stornovany") return res.status(400).json({ error: "Doklad je již stornovaný." });
 
     await store.transaction(async () => {
+      // FIX P1 (critic 2026-07-09, agent-memory/critic/document_storno_ghost_posting.md):
+      // storno dokladu musí zvrátit i navázané účetní zápisy (posting_line je
+      // append-only, jinak by zůstaly "duchy" ve výkazech/hlavní knize i po
+      // stornu zaúčtovaného dokladu). Stejná logika jako postings.js POST
+      // /:id/storno — stornoPosting() vytvoří protichůdný zápis (MD<->D).
+      // NOT EXISTS guard (critic 2026-07-09, double-storno gap): posting mohl už být
+      // zvrácen dřív přes POST /api/postings/:id/storno — bez tohoto by ho document
+      // storno našlo znovu (storno_of_posting_id IS NULL platí i pro už-zvrácený
+      // originál) a zvrátilo podruhé, což by v hlavní knize nevrátilo nulu.
+      const postings = await store.all(
+        `SELECT id FROM posting p WHERE p.document_id = ? AND p.storno_of_posting_id IS NULL
+         AND NOT EXISTS (SELECT 1 FROM posting sp WHERE sp.storno_of_posting_id = p.id)`,
+        [req.params.id]
+      );
+      for (const p of postings) {
+        await stornoPosting(p.id, reason || "Storno dokladu", user_id);
+      }
       await store.run("UPDATE document SET status = 'stornovany' WHERE id = ?", [req.params.id]);
-      await writeAuditLog({ unitId: before.accounting_unit_id, userId: user_id, action: "STORNO", table: "document", entityId: req.params.id, before, after: { status: "stornovany", reason } });
+      await writeAuditLog({ unitId: before.accounting_unit_id, userId: user_id, action: "STORNO", table: "document", entityId: req.params.id, before, after: { status: "stornovany", reason, reversed_postings: postings.map((p) => p.id) } });
     });
     res.json(await store.get("SELECT * FROM document WHERE id = ?", [req.params.id]));
   } catch (err) {
@@ -318,6 +336,39 @@ router.get("/attachments/:attachmentId/download", async (req, res) => {
     res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(attachment.file_name)}"`);
     fs.createReadStream(attachment.file_path).pipe(res);
   } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// POST /api/documents/:id/payment-link — vytvoří/vrátí trvalý odkaz na
+// zaplacení vydané faktury přes Stripe (veřejná stránka /pay/:token,
+// routes/stripe.js payPage). Za requireAuth (index.js) — jen přihlášený
+// uživatel firmy může odkaz vygenerovat. Samotné placení (Stripe Checkout)
+// je WEB-ONLY (potřebuje PUBLIC_BASE_URL), ale zápis pay_tokenu do DB
+// funguje i bez Stripe klíčů — ověří se až při otevření /pay/:token.
+router.post("/:id/payment-link", async (req, res) => {
+  try {
+    if (!process.env.PUBLIC_BASE_URL) {
+      return res.status(500).json({ error: "Chybí PUBLIC_BASE_URL — platební odkazy fungují jen na webovém nasazení." });
+    }
+    const doc = await store.get("SELECT * FROM document WHERE id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
+    if (!doc) return res.status(404).json({ error: "Doklad nenalezen" });
+    if (doc.doc_type !== "faktura_vydana") return res.status(400).json({ error: "Platební odkaz lze vygenerovat jen pro vydané faktury." });
+
+    let payment = await store.get("SELECT * FROM invoice_payment WHERE document_id = ?", [doc.id]);
+    if (!payment) {
+      const payToken = crypto.randomBytes(24).toString("hex");
+      await store.run(
+        `INSERT INTO invoice_payment (accounting_unit_id, document_id, pay_token, amount, currency)
+         VALUES (?,?,?,?,?)`,
+        [doc.accounting_unit_id, doc.id, payToken, doc.total_amount, doc.currency || "CZK"]
+      );
+      payment = await store.get("SELECT * FROM invoice_payment WHERE document_id = ?", [doc.id]);
+      await writeAuditLog({ unitId: doc.accounting_unit_id, userId: req.user.id, action: "INSERT", table: "invoice_payment", entityId: payment.id, after: { document_id: doc.id } });
+    }
+    const base = process.env.PUBLIC_BASE_URL.replace(/\/$/, "");
+    res.json({ url: `${base}/pay/${payment.pay_token}`, status: payment.status });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // POST /api/documents/scan — vytáhne text z nahrané faktury (PDF/PNG/JPG) a

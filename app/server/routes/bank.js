@@ -1,6 +1,8 @@
 const express = require("express");
+const crypto = require("crypto");
 const store = require("../db");
 const { nextPostingNumber, writeAuditLog } = require("../lib/core");
+const { createBankStatementLine, amountsMatch } = require("../lib/bankMovements");
 const router = express.Router();
 
 // Vestavěný slovník klíčových slov — výchozí návrh kategorie, dokud si
@@ -33,12 +35,15 @@ router.post("/import", async (req, res) => {
     const inserted = await store.transaction(async () => {
       const rows = [];
       for (const l of lines) {
-        await store.run(
-          `INSERT INTO bank_statement_line (accounting_unit_id, bank_account, statement_date, amount, counterparty_name, variable_symbol)
-           VALUES (?,?,?,?,?,?)`,
-          [accounting_unit_id, bank_account, l.statement_date, l.amount, l.counterparty_name || null, l.variable_symbol || null]
-        );
-        rows.push(await store.get("SELECT * FROM bank_statement_line WHERE id = last_insert_rowid()"));
+        rows.push(await createBankStatementLine({
+          unitId: accounting_unit_id,
+          bankAccount: bank_account,
+          date: l.statement_date,
+          amount: l.amount,
+          counterpartyName: l.counterparty_name,
+          variableSymbol: l.variable_symbol,
+          externalRef: l.external_ref,
+        }));
       }
       return rows;
     });
@@ -46,13 +51,24 @@ router.post("/import", async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-// POST /api/bank/:id/match — spárování řádku výpisu s dokladem (faktura/pokladní doklad)
+// POST /api/bank/:id/match — spárování řádku výpisu s dokladem (faktura/pokladní doklad).
+// FIX (critic 2026-07-09): scope na accounting_unit_id (IDOR) + odmítnutí
+// neshody částky (viz lib/bankMovements.amountsMatch — částečná úhrada by
+// spárovala celou fakturu a ta by zmizela z pohledávky/závazky reportu).
 router.post("/:id/match", async (req, res) => {
   const { document_id } = req.body;
+  const unitId = req.user.accountingUnitId;
   try {
-    const line = await store.get("SELECT * FROM bank_statement_line WHERE id = ?", [req.params.id]);
+    const line = await store.get("SELECT * FROM bank_statement_line WHERE id = ? AND accounting_unit_id = ?", [req.params.id, unitId]);
     if (!line) return res.status(404).json({ error: "Řádek výpisu nenalezen" });
-    await store.run("UPDATE bank_statement_line SET matched_document_id = ? WHERE id = ?", [document_id, req.params.id]);
+    const doc = await store.get("SELECT * FROM document WHERE id = ? AND accounting_unit_id = ?", [document_id, unitId]);
+    if (!doc) return res.status(404).json({ error: "Doklad nenalezen" });
+    if (!amountsMatch(line.amount, doc.total_amount)) {
+      return res.status(400).json({
+        error: `Částka pohybu (${Math.abs(line.amount)}) neodpovídá částce dokladu (${doc.total_amount}) — nelze spárovat celou fakturu s částečnou úhradou. Pro částečné úhrady použijte zaúčtování bez dokladu (quick-post).`,
+      });
+    }
+    await store.run("UPDATE bank_statement_line SET matched_document_id = ? WHERE id = ? AND accounting_unit_id = ?", [document_id, req.params.id, unitId]);
     store.persist();
     res.json(await store.get("SELECT * FROM bank_statement_line WHERE id = ?", [req.params.id]));
   } catch (err) { res.status(400).json({ error: err.message }); }
@@ -169,6 +185,51 @@ router.post("/:id/quick-post", async (req, res) => {
     res.status(201).json(posting);
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
+
+// GET /api/bank/inbound-mailbox?unit=1 — vrátí existující párovací token/adresu
+// pro danou firmu (bank_inbound_mailbox), pokud už byl vygenerován.
+router.get("/inbound-mailbox", async (req, res) => {
+  try {
+    const unitId = req.query.unit || req.user.accountingUnitId;
+    const mailbox = await store.get("SELECT * FROM bank_inbound_mailbox WHERE accounting_unit_id = ?", [unitId]);
+    if (!mailbox) return res.json(null);
+    res.json({ ...mailbox, address: buildInboundAddress(mailbox.token) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/bank/inbound-mailbox — vygeneruje párovací token pro firmu (Postmark
+// MailboxHash routing, ekvivalent Fakturoidí adresy bank.X.Y@...). Idempotentní —
+// pokud token pro firmu už existuje, vrátí ten stávající (nepřegeneruje).
+router.post("/inbound-mailbox", async (req, res) => {
+  const { bank_account } = req.body;
+  const unitId = req.user.accountingUnitId;
+  if (!bank_account) return res.status(400).json({ error: "Chybí bank_account." });
+  try {
+    let mailbox = await store.get("SELECT * FROM bank_inbound_mailbox WHERE accounting_unit_id = ?", [unitId]);
+    if (!mailbox) {
+      const token = crypto.randomBytes(8).toString("hex");
+      await store.run(
+        "INSERT INTO bank_inbound_mailbox (accounting_unit_id, token, bank_account) VALUES (?,?,?)",
+        [unitId, token, bank_account]
+      );
+      store.persist();
+      mailbox = await store.get("SELECT * FROM bank_inbound_mailbox WHERE accounting_unit_id = ?", [unitId]);
+    }
+    res.status(201).json({ ...mailbox, address: buildInboundAddress(mailbox.token) });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Sestaví párovací e-mailovou adresu z POSTMARK_INBOUND_ADDRESS (např.
+// "abc123@inbound.postmarkapp.com") vložením +token před "@" (Postmark
+// MailboxHash routing). Bez env proměnné vrací null — frontend zobrazí
+// informaci, že adresa čeká na doplnění nastavení serveru.
+function buildInboundAddress(token) {
+  const base = process.env.POSTMARK_INBOUND_ADDRESS;
+  if (!base) return null;
+  const at = base.indexOf("@");
+  if (at === -1) return `${base}+${token}`;
+  return `${base.slice(0, at)}+${token}${base.slice(at)}`;
+}
 
 // GET /api/bank/cashflow?unit=1 — zůstatky po jednotlivých účtech (banka/pokladna)
 // a přehled příjmů/výdajů za posledních 30 a 90 dní.

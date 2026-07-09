@@ -86,6 +86,14 @@ async function migrate() {
   await ensureColumn("accounting_unit", "signature_data_url", "TEXT");
   // E-mail kontaktu — výchozí adresát při odeslání vydané faktury.
   await ensureColumn("contact", "email", "TEXT");
+  // Bankovní e-mail parsing + Stripe platby — idempotence pohybů (viz
+  // lib/bankMovements.js). Index musí vzniknout AŽ po ensureColumn, jinak
+  // by na starších DB (bez sloupce) CREATE INDEX v schema.sql shodilo init.
+  await ensureColumn("bank_statement_line", "external_ref", "TEXT");
+  db.run(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_statement_line_external_ref
+     ON bank_statement_line(accounting_unit_id, external_ref) WHERE external_ref IS NOT NULL`
+  );
 }
 
 function persist() {
