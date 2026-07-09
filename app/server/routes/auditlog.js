@@ -3,14 +3,14 @@ const store = require("../db");
 const router = express.Router();
 
 // GET /api/audit-log?unit=1&table=document&entityId=5 — nezměnitelný záznam všech úkonů (§ 33 odst. 8 ZoÚ)
-router.get("/", (req, res) => {
+router.get("/", async (req, res) => {
   const { unit, table, entityId, limit } = req.query;
   try {
     let where = "accounting_unit_id = ?";
     const params = [unit];
     if (table) { where += " AND entity_table = ?"; params.push(table); }
     if (entityId) { where += " AND entity_id = ?"; params.push(entityId); }
-    const rows = store.all(
+    const rows = await store.all(
       `SELECT * FROM audit_log WHERE ${where} ORDER BY occurred_at DESC, id DESC LIMIT ?`,
       [...params, Number(limit) || 500]
     );

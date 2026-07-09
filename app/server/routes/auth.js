@@ -10,7 +10,7 @@ function publicUser(user) {
 }
 
 // POST /api/auth/register-company — založení nové firmy + první uživatel (jednatel/admin)
-router.post("/register-company", (req, res) => {
+router.post("/register-company", async (req, res) => {
   const { company_name, ico, dic, full_name, email, password } = req.body;
   if (!company_name || !ico || !full_name || !email || !password) {
     return res.status(400).json({ error: "Vyplňte název firmy, IČO, jméno, e-mail a heslo." });
@@ -18,22 +18,22 @@ router.post("/register-company", (req, res) => {
   if (password.length < 8) return res.status(400).json({ error: "Heslo musí mít alespoň 8 znaků." });
 
   try {
-    const result = store.transaction(() => {
-      store.run(
+    const result = await store.transaction(async () => {
+      await store.run(
         `INSERT INTO accounting_unit (name, ico, dic, accounting_mode, unit_category, is_vat_payer, fiscal_year_start_month)
          VALUES (?,?,?,?,?,?,?)`,
         [company_name, ico, dic || null, "podvojne_ucetnictvi", "mikro", 0, 1]
       );
-      const unitId = store.get("SELECT last_insert_rowid() AS id").id;
-      insertAccounts(store, unitId);
+      const unitId = (await store.get("SELECT last_insert_rowid() AS id")).id;
+      await insertAccounts(store, unitId);
 
-      const passwordHash = hashPasswordSync(password);
-      store.run(
+      const passwordHash = await hashPassword(password);
+      await store.run(
         `INSERT INTO app_user (accounting_unit_id, full_name, email, role, password_hash) VALUES (?,?,?,?,?)`,
         [unitId, full_name, email, "admin", passwordHash]
       );
-      const userId = store.get("SELECT last_insert_rowid() AS id").id;
-      return store.get("SELECT * FROM app_user WHERE id = ?", [userId]);
+      const userId = (await store.get("SELECT last_insert_rowid() AS id")).id;
+      return await store.get("SELECT * FROM app_user WHERE id = ?", [userId]);
     });
     store.persist();
     res.status(201).json({ user: publicUser(result), token: signSession(result) });
@@ -43,17 +43,11 @@ router.post("/register-company", (req, res) => {
   }
 });
 
-// bcryptjs hash() is async-only; register-company runs inside a synchronous
-// store.transaction(), so we use the sync API here specifically.
-function hashPasswordSync(plain) {
-  return require("bcryptjs").hashSync(plain, 10);
-}
-
 // POST /api/auth/login
 router.post("/login", async (req, res) => {
   const { email, password } = req.body;
   try {
-    const user = store.get("SELECT * FROM app_user WHERE email = ? AND active = 1", [email]);
+    const user = await store.get("SELECT * FROM app_user WHERE email = ? AND active = 1", [email]);
     const ok = user && (await verifyPassword(password, user.password_hash));
     if (!ok) return res.status(401).json({ error: "Nesprávný e-mail nebo heslo." });
     res.json({ user: publicUser(user), token: signSession(user) });
@@ -68,13 +62,13 @@ router.post("/set-password", async (req, res) => {
   if (!email || !password) return res.status(400).json({ error: "Zadejte e-mail a heslo." });
   if (password.length < 8) return res.status(400).json({ error: "Heslo musí mít alespoň 8 znaků." });
   try {
-    const user = store.get("SELECT * FROM app_user WHERE email = ? AND active = 1", [email]);
+    const user = await store.get("SELECT * FROM app_user WHERE email = ? AND active = 1", [email]);
     if (!user) return res.status(404).json({ error: "Uživatel s tímto e-mailem nenalezen." });
     if (user.password_hash) return res.status(409).json({ error: "Tento účet už má heslo nastaveno — použijte přihlášení." });
     const passwordHash = await hashPassword(password);
-    store.run("UPDATE app_user SET password_hash = ? WHERE id = ?", [passwordHash, user.id]);
+    await store.run("UPDATE app_user SET password_hash = ? WHERE id = ?", [passwordHash, user.id]);
     store.persist();
-    const updated = store.get("SELECT * FROM app_user WHERE id = ?", [user.id]);
+    const updated = await store.get("SELECT * FROM app_user WHERE id = ?", [user.id]);
     res.json({ user: publicUser(updated), token: signSession(updated) });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
@@ -86,21 +80,21 @@ router.post("/logout", (req, res) => {
 });
 
 // GET /api/auth/me
-router.get("/me", requireAuth, (req, res) => {
-  const user = store.get("SELECT * FROM app_user WHERE id = ?", [req.user.id]);
+router.get("/me", requireAuth, async (req, res) => {
+  const user = await store.get("SELECT * FROM app_user WHERE id = ?", [req.user.id]);
   if (!user) return res.status(401).json({ error: "Uživatel neexistuje." });
-  const unit = store.get("SELECT id, name, ico, dic FROM accounting_unit WHERE id = ?", [user.accounting_unit_id]);
+  const unit = await store.get("SELECT id, name, ico, dic FROM accounting_unit WHERE id = ?", [user.accounting_unit_id]);
   res.json({ user: publicUser(user), unit });
 });
 
 // POST /api/auth/invite — pozvání kolegy/společníka do stejné firmy (jen admin/jednatel)
-router.post("/invite", requireAuth, (req, res) => {
+router.post("/invite", requireAuth, async (req, res) => {
   if (req.user.role !== "admin") return res.status(403).json({ error: "Pouze admin/jednatel může zvát kolegy." });
   const { email, role } = req.body;
   if (!email) return res.status(400).json({ error: "Zadejte e-mail kolegy." });
   try {
     const token = crypto.randomBytes(24).toString("hex");
-    store.run(
+    await store.run(
       `INSERT INTO company_invite (accounting_unit_id, email, token, role, invited_by) VALUES (?,?,?,?,?)`,
       [req.user.accountingUnitId, email, token, role || "zadavatel", req.user.id]
     );
@@ -111,23 +105,23 @@ router.post("/invite", requireAuth, (req, res) => {
 });
 
 // POST /api/auth/accept-invite — kolega nastaví heslo a získá přístup ke stejné firmě
-router.post("/accept-invite", (req, res) => {
+router.post("/accept-invite", async (req, res) => {
   const { token, full_name, password } = req.body;
   if (!token || !full_name || !password) return res.status(400).json({ error: "Chybí token, jméno nebo heslo." });
   if (password.length < 8) return res.status(400).json({ error: "Heslo musí mít alespoň 8 znaků." });
   try {
-    const invite = store.get("SELECT * FROM company_invite WHERE token = ? AND used_at IS NULL", [token]);
+    const invite = await store.get("SELECT * FROM company_invite WHERE token = ? AND used_at IS NULL", [token]);
     if (!invite) return res.status(404).json({ error: "Pozvánka nenalezena nebo už byla použita." });
 
-    const result = store.transaction(() => {
-      const passwordHash = hashPasswordSync(password);
-      store.run(
+    const result = await store.transaction(async () => {
+      const passwordHash = await hashPassword(password);
+      await store.run(
         `INSERT INTO app_user (accounting_unit_id, full_name, email, role, password_hash) VALUES (?,?,?,?,?)`,
         [invite.accounting_unit_id, full_name, invite.email, invite.role, passwordHash]
       );
-      const userId = store.get("SELECT last_insert_rowid() AS id").id;
-      store.run("UPDATE company_invite SET used_at = datetime('now') WHERE id = ?", [invite.id]);
-      return store.get("SELECT * FROM app_user WHERE id = ?", [userId]);
+      const userId = (await store.get("SELECT last_insert_rowid() AS id")).id;
+      await store.run("UPDATE company_invite SET used_at = datetime('now') WHERE id = ?", [invite.id]);
+      return await store.get("SELECT * FROM app_user WHERE id = ?", [userId]);
     });
     store.persist();
     res.status(201).json({ user: publicUser(result), token: signSession(result) });
@@ -147,9 +141,9 @@ router.post("/accept-invite", (req, res) => {
 const BANKID_MODE = process.env.BANKID_MODE || "mock";
 
 // POST /api/auth/bankid/start — { ico }
-router.post("/bankid/start", (req, res) => {
+router.post("/bankid/start", async (req, res) => {
   const { ico } = req.body;
-  const unit = store.get("SELECT id, name, ico FROM accounting_unit WHERE ico = ?", [ico]);
+  const unit = await store.get("SELECT id, name, ico FROM accounting_unit WHERE ico = ?", [ico]);
   if (!unit) return res.status(404).json({ error: "Firma s tímto IČO není v systému zaregistrována." });
 
   if (BANKID_MODE === "live") {
@@ -159,35 +153,35 @@ router.post("/bankid/start", (req, res) => {
     return res.status(501).json({ error: "BankID (live) OAuth flow zatím není implementován." });
   }
 
-  const directors = store.all("SELECT full_name FROM company_director WHERE accounting_unit_id = ?", [unit.id]).map((d) => d.full_name);
+  const directors = (await store.all("SELECT full_name FROM company_director WHERE accounting_unit_id = ?", [unit.id])).map((d) => d.full_name);
   res.json({ mode: "mock", accounting_unit_id: unit.id, company_name: unit.name, directors });
 });
 
 // POST /api/auth/bankid/callback — { accounting_unit_id, full_name, email? }
-router.post("/bankid/callback", (req, res) => {
+router.post("/bankid/callback", async (req, res) => {
   const { accounting_unit_id, full_name, email } = req.body;
   try {
-    const unit = store.get("SELECT id FROM accounting_unit WHERE id = ?", [accounting_unit_id]);
+    const unit = await store.get("SELECT id FROM accounting_unit WHERE id = ?", [accounting_unit_id]);
     if (!unit) return res.status(404).json({ error: "Firma nenalezena." });
 
-    const directors = store.all("SELECT full_name FROM company_director WHERE accounting_unit_id = ?", [accounting_unit_id])
+    const directors = (await store.all("SELECT full_name FROM company_director WHERE accounting_unit_id = ?", [accounting_unit_id]))
       .map((d) => d.full_name.trim().toLowerCase());
     if (!directors.includes(String(full_name || "").trim().toLowerCase())) {
       return res.status(403).json({ error: "Nejste evidovaný jednatel této firmy." });
     }
 
-    let user = store.get("SELECT * FROM app_user WHERE accounting_unit_id = ? AND full_name = ?", [accounting_unit_id, full_name]);
+    let user = await store.get("SELECT * FROM app_user WHERE accounting_unit_id = ? AND full_name = ?", [accounting_unit_id, full_name]);
     if (!user) {
       if (!email) return res.status(400).json({ error: "Pro první přihlášení přes BankID zadejte e-mail." });
-      store.run(
+      await store.run(
         `INSERT INTO app_user (accounting_unit_id, full_name, email, role, bankid_verified) VALUES (?,?,?,?,1)`,
         [accounting_unit_id, full_name, email, "admin"]
       );
-      const userId = store.get("SELECT last_insert_rowid() AS id").id;
-      user = store.get("SELECT * FROM app_user WHERE id = ?", [userId]);
+      const userId = (await store.get("SELECT last_insert_rowid() AS id")).id;
+      user = await store.get("SELECT * FROM app_user WHERE id = ?", [userId]);
     } else if (!user.bankid_verified) {
-      store.run("UPDATE app_user SET bankid_verified = 1 WHERE id = ?", [user.id]);
-      user = store.get("SELECT * FROM app_user WHERE id = ?", [user.id]);
+      await store.run("UPDATE app_user SET bankid_verified = 1 WHERE id = ?", [user.id]);
+      user = await store.get("SELECT * FROM app_user WHERE id = ?", [user.id]);
     }
     store.persist();
     res.json({ user: publicUser(user), token: signSession(user) });

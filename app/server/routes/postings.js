@@ -4,9 +4,9 @@ const { nextPostingNumber, writeAuditLog, assertPeriodOpen, stornoPosting } = re
 const router = express.Router();
 
 // GET /api/postings?unit=1
-router.get("/", (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const rows = store.all(
+    const rows = await store.all(
       "SELECT * FROM posting WHERE accounting_unit_id = ? ORDER BY posting_date DESC, posting_number DESC",
       [req.query.unit]
     );
@@ -17,7 +17,7 @@ router.get("/", (req, res) => {
 });
 
 // POST /api/postings — zaúčtování (hlavička + řádky). MD musí == D, jinak transakce spadne.
-router.post("/", (req, res) => {
+router.post("/", async (req, res) => {
   const { accounting_unit_id, period_id, document_id, posting_date, description, created_by, lines } = req.body;
 
   if (!Array.isArray(lines) || lines.length < 2) {
@@ -25,8 +25,8 @@ router.post("/", (req, res) => {
   }
 
   try {
-    const posting = store.transaction(() => {
-      assertPeriodOpen(period_id);
+    const posting = await store.transaction(async () => {
+      await assertPeriodOpen(period_id);
 
       const md = lines.filter((l) => l.side === "MD").reduce((s, l) => s + Number(l.amount), 0);
       const d = lines.filter((l) => l.side === "D").reduce((s, l) => s + Number(l.amount), 0);
@@ -34,28 +34,28 @@ router.post("/", (req, res) => {
         throw new Error(`Účetní zápis není vyrovnaný: MD = ${md.toFixed(2)}, D = ${d.toFixed(2)}. Podvojné účetnictví vyžaduje MD = D.`);
       }
 
-      const postingNumber = nextPostingNumber(accounting_unit_id);
-      store.run(
+      const postingNumber = await nextPostingNumber(accounting_unit_id);
+      await store.run(
         `INSERT INTO posting (accounting_unit_id, period_id, posting_number, document_id, posting_date, description, created_by)
          VALUES (?,?,?,?,?,?,?)`,
         [accounting_unit_id, period_id, postingNumber, document_id || null, posting_date, description, created_by]
       );
-      const postingId = store.get("SELECT last_insert_rowid() AS id").id;
+      const postingId = (await store.get("SELECT last_insert_rowid() AS id")).id;
 
       for (const l of lines) {
-        store.run(
+        await store.run(
           `INSERT INTO posting_line (posting_id, account_id, side, amount, project_id) VALUES (?,?,?,?,?)`,
           [postingId, l.account_id, l.side, l.amount, l.project_id || null]
         );
       }
 
       if (document_id) {
-        store.run(`UPDATE document SET status = 'zauctovany' WHERE id = ? AND status IN ('koncept','schvaleny')`, [document_id]);
+        await store.run(`UPDATE document SET status = 'zauctovany' WHERE id = ? AND status IN ('koncept','schvaleny')`, [document_id]);
       }
 
-      writeAuditLog({ unitId: accounting_unit_id, userId: created_by, action: "INSERT", table: "posting", entityId: postingId, after: { posting_number: postingNumber, md, d } });
+      await writeAuditLog({ unitId: accounting_unit_id, userId: created_by, action: "INSERT", table: "posting", entityId: postingId, after: { posting_number: postingNumber, md, d } });
 
-      return store.get("SELECT * FROM posting WHERE id = ?", [postingId]);
+      return await store.get("SELECT * FROM posting WHERE id = ?", [postingId]);
     });
     res.status(201).json(posting);
   } catch (err) {
@@ -64,11 +64,11 @@ router.post("/", (req, res) => {
 });
 
 // GET /api/postings/:id — detail zápisu s řádky
-router.get("/:id", (req, res) => {
+router.get("/:id", async (req, res) => {
   try {
-    const header = store.get("SELECT * FROM posting WHERE id = ?", [req.params.id]);
+    const header = await store.get("SELECT * FROM posting WHERE id = ?", [req.params.id]);
     if (!header) return res.status(404).json({ error: "Zápis nenalezen" });
-    const lines = store.all(
+    const lines = await store.all(
       `SELECT pl.*, coa.account_number, coa.name AS account_name
        FROM posting_line pl JOIN chart_of_accounts coa ON coa.id = pl.account_id
        WHERE posting_id = ?`,
@@ -81,10 +81,10 @@ router.get("/:id", (req, res) => {
 });
 
 // POST /api/postings/:id/storno — jediný povolený způsob "zrušení" zápisu.
-router.post("/:id/storno", (req, res) => {
+router.post("/:id/storno", async (req, res) => {
   const { reason, created_by } = req.body;
   try {
-    const newId = store.transaction(() => stornoPosting(req.params.id, reason, created_by));
+    const newId = await store.transaction(async () => stornoPosting(req.params.id, reason, created_by));
     res.status(201).json({ storno_posting_id: newId });
   } catch (err) {
     res.status(400).json({ error: err.message });

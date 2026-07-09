@@ -5,19 +5,19 @@
 const store = require("./db");
 const { insertAccounts } = require("./lib/chartOfAccountsSeed");
 
-function seed() {
-  const existing = store.get("SELECT id FROM accounting_unit LIMIT 1");
+async function seed() {
+  const existing = await store.get("SELECT id FROM accounting_unit LIMIT 1");
   if (existing) return; // už osazeno, nic nedělat
 
-  store.transaction(() => {
-    store.run(
+  await store.transaction(async () => {
+    await store.run(
       `INSERT INTO accounting_unit (name, ico, dic, accounting_mode, unit_category, is_vat_payer, fiscal_year_start_month)
        VALUES (?,?,?,?,?,?,?)`,
       ["Globaal Elevate Production s.r.o.", "24972070", "CZ24972070", "podvojne_ucetnictvi", "mikro", 0, 1]
     );
-    const unitId = store.get("SELECT last_insert_rowid() AS id").id;
+    const unitId = (await store.get("SELECT last_insert_rowid() AS id")).id;
 
-    store.run(
+    await store.run(
       `INSERT INTO app_user (accounting_unit_id, full_name, email, role) VALUES (?,?,?,?)`,
       [unitId, "Luigi", "luigi@globaalelevate.com", "admin"]
     );
@@ -26,16 +26,16 @@ function seed() {
     // zdroj pravdy pro ověření přihlášení přes BankID.
     const directors = ["Jakub Lučan", "Jan Leština", "Štěpán Lísa"];
     for (const name of directors) {
-      store.run(`INSERT INTO company_director (accounting_unit_id, full_name) VALUES (?,?)`, [unitId, name]);
+      await store.run(`INSERT INTO company_director (accounting_unit_id, full_name) VALUES (?,?)`, [unitId, name]);
     }
 
-    store.run(
+    await store.run(
       `INSERT INTO accounting_period (accounting_unit_id, fiscal_year, start_date, end_date, status)
        VALUES (?,?,?,?,?)`,
       [unitId, 2026, "2026-04-20", "2026-12-31", "otevrene"]
     );
 
-    const acctIds = insertAccounts(store, unitId);
+    const acctIds = await insertAccounts(store, unitId);
 
     const projects = [
       ["NIKTENDO2027", "Nik Tendo Praha", "2027-01-22"],
@@ -44,7 +44,7 @@ function seed() {
       ["3LFEST", "3L Fest — Chomutov airfield pilot", "2027-06-01"],
     ];
     for (const [code, name, start] of projects) {
-      store.run(
+      await store.run(
         `INSERT INTO project (accounting_unit_id, code, name, start_date) VALUES (?,?,?,?)`,
         [unitId, code, name, start]
       );
@@ -65,12 +65,12 @@ function seed() {
         [["518", "MD", "zaklad"], ["343", "MD", "dph"], ["321", "D", "celkem"]]],
     ];
     for (const [name, docType, desc, lines] of templates) {
-      store.run(`INSERT INTO posting_template (accounting_unit_id, name, doc_type, description) VALUES (?,?,?,?)`,
+      await store.run(`INSERT INTO posting_template (accounting_unit_id, name, doc_type, description) VALUES (?,?,?,?)`,
         [unitId, name, docType, desc]);
-      const tplId = store.get("SELECT last_insert_rowid() AS id").id;
+      const tplId = (await store.get("SELECT last_insert_rowid() AS id")).id;
       for (const [accNum, side, src] of lines) {
         if (!acctIds[accNum]) continue;
-        store.run(`INSERT INTO posting_template_line (template_id, account_id, side, amount_source) VALUES (?,?,?,?)`,
+        await store.run(`INSERT INTO posting_template_line (template_id, account_id, side, amount_source) VALUES (?,?,?,?)`,
           [tplId, acctIds[accNum], side, src]);
       }
     }

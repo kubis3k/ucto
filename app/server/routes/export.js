@@ -21,18 +21,18 @@ function sendCsv(res, filename, rows) {
 }
 
 // GET /api/export/doklady?unit=1 — export pro daňového poradce/auditora (kap. 5.10 brief)
-router.get("/doklady", (req, res) => {
-  const rows = store.all("SELECT * FROM document WHERE accounting_unit_id = ? ORDER BY issue_date", [req.query.unit]);
+router.get("/doklady", async (req, res) => {
+  const rows = await store.all("SELECT * FROM document WHERE accounting_unit_id = ? ORDER BY issue_date", [req.query.unit]);
   sendCsv(res, "doklady.csv", rows);
 });
 
-router.get("/hlavni-kniha", (req, res) => {
-  const rows = reports.hlavniKniha(req.query.unit, req.query.asOf || new Date().toISOString().slice(0, 10));
+router.get("/hlavni-kniha", async (req, res) => {
+  const rows = await reports.hlavniKniha(req.query.unit, req.query.asOf || new Date().toISOString().slice(0, 10));
   sendCsv(res, "hlavni-kniha.csv", rows);
 });
 
-router.get("/ucetni-denik", (req, res) => {
-  const rows = store.all(
+router.get("/ucetni-denik", async (req, res) => {
+  const rows = await store.all(
     `SELECT p.posting_number, p.posting_date, p.description, coa.account_number, coa.name AS account_name, pl.side, pl.amount
      FROM posting p JOIN posting_line pl ON pl.posting_id = p.id JOIN chart_of_accounts coa ON coa.id = pl.account_id
      WHERE p.accounting_unit_id = ? ORDER BY p.posting_number, pl.id`,
@@ -41,18 +41,18 @@ router.get("/ucetni-denik", (req, res) => {
   sendCsv(res, "ucetni-denik.csv", rows);
 });
 
-router.get("/rozvaha", (req, res) => {
-  const { polozky } = reports.rozvaha(req.query.unit, req.query.asOf || new Date().toISOString().slice(0, 10));
+router.get("/rozvaha", async (req, res) => {
+  const { polozky } = await reports.rozvaha(req.query.unit, req.query.asOf || new Date().toISOString().slice(0, 10));
   sendCsv(res, "rozvaha.csv", polozky);
 });
 
-router.get("/vysledovka", (req, res) => {
-  const { polozky } = reports.vysledovka(req.query.unit, req.query.period);
+router.get("/vysledovka", async (req, res) => {
+  const { polozky } = await reports.vysledovka(req.query.unit, req.query.period);
   sendCsv(res, "vysledovka.csv", polozky);
 });
 
-router.get("/audit-log", (req, res) => {
-  const rows = store.all("SELECT * FROM audit_log WHERE accounting_unit_id = ? ORDER BY occurred_at", [req.query.unit]);
+router.get("/audit-log", async (req, res) => {
+  const rows = await store.all("SELECT * FROM audit_log WHERE accounting_unit_id = ? ORDER BY occurred_at", [req.query.unit]);
   sendCsv(res, "audit-log.csv", rows);
 });
 

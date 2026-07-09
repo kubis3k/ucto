@@ -4,9 +4,9 @@
 // =====================================================================
 const store = require("../db");
 
-function accountNaturalBalance(accountId, asOfDate) {
-  const acc = store.get(`SELECT account_type FROM chart_of_accounts WHERE id = ?`, [accountId]);
-  const sums = store.get(
+async function accountNaturalBalance(accountId, asOfDate) {
+  const acc = await store.get(`SELECT account_type FROM chart_of_accounts WHERE id = ?`, [accountId]);
+  const sums = await store.get(
     `SELECT
        COALESCE(SUM(CASE WHEN pl.side='MD' THEN pl.amount ELSE 0 END),0) AS md,
        COALESCE(SUM(CASE WHEN pl.side='D'  THEN pl.amount ELSE 0 END),0) AS d
@@ -21,8 +21,8 @@ function accountNaturalBalance(accountId, asOfDate) {
 }
 
 // HLAVNÍ KNIHA — pohyby a průběžný zůstatek po účtech
-function hlavniKniha(unitId, asOfDate) {
-  const rows = store.all(
+async function hlavniKniha(unitId, asOfDate) {
+  const rows = await store.all(
     `SELECT coa.id AS account_id, coa.account_number, coa.name AS account_name, coa.account_type,
             p.posting_date, p.posting_number, p.description, pl.side, pl.amount
      FROM posting_line pl
@@ -51,8 +51,8 @@ function hlavniKniha(unitId, asOfDate) {
 }
 
 // ROZVAHA (zjednodušený rozsah — mikro účetní jednotka)
-function rozvaha(unitId, asOfDate) {
-  const accounts = store.all(
+async function rozvaha(unitId, asOfDate) {
+  const accounts = await store.all(
     `SELECT id, account_class, account_number, name, account_type
      FROM chart_of_accounts
      WHERE accounting_unit_id = ? AND account_type IN ('rozvahovy_aktivni','rozvahovy_pasivni')
@@ -60,24 +60,27 @@ function rozvaha(unitId, asOfDate) {
      ORDER BY account_type DESC, account_number`,
     [unitId]
   );
-  const polozky = accounts.map((a) => ({
-    strana: a.account_type === "rozvahovy_aktivni" ? "AKTIVA" : "PASIVA",
-    account_class: a.account_class,
-    account_number: a.account_number,
-    account_name: a.name,
-    zustatek: accountNaturalBalance(a.id, asOfDate),
-  }));
+  const polozky = [];
+  for (const a of accounts) {
+    polozky.push({
+      strana: a.account_type === "rozvahovy_aktivni" ? "AKTIVA" : "PASIVA",
+      account_class: a.account_class,
+      account_number: a.account_number,
+      account_name: a.name,
+      zustatek: await accountNaturalBalance(a.id, asOfDate),
+    });
+  }
   const aktiva = polozky.filter((p) => p.strana === "AKTIVA").reduce((s, p) => s + p.zustatek, 0);
   const pasiva = polozky.filter((p) => p.strana === "PASIVA").reduce((s, p) => s + p.zustatek, 0);
   return { polozky, kontrola: { aktiva_celkem: aktiva, pasiva_celkem: pasiva, rozdil: aktiva - pasiva } };
 }
 
 // VÝSLEDOVKA za účetní období — zjednodušený rozsah
-function vysledovka(unitId, periodId) {
-  const period = store.get(`SELECT start_date, end_date FROM accounting_period WHERE id = ?`, [periodId]);
+async function vysledovka(unitId, periodId) {
+  const period = await store.get(`SELECT start_date, end_date FROM accounting_period WHERE id = ?`, [periodId]);
   if (!period) throw new Error("Účetní období neexistuje.");
 
-  const rows = store.all(
+  const rows = await store.all(
     `SELECT coa.account_type, coa.account_number, coa.name,
             SUM(CASE
                   WHEN coa.account_type='vysledkovy_naklad' AND pl.side='MD' THEN pl.amount
@@ -104,12 +107,12 @@ function vysledovka(unitId, periodId) {
 }
 
 // Sledování obratu pro DPH limit (2 mil. Kč / 12 po sobě jdoucích měsíců)
-function obratDph(unitId) {
+async function obratDph(unitId) {
   const twelveMonthsAgo = new Date();
   twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
   const cutoff = twelveMonthsAgo.toISOString().slice(0, 10);
 
-  const row = store.get(
+  const row = await store.get(
     `SELECT COALESCE(SUM(total_amount),0) AS obrat
      FROM document
      WHERE accounting_unit_id = ? AND doc_type = 'faktura_vydana' AND status <> 'stornovany' AND issue_date >= ?`,
@@ -125,8 +128,8 @@ function obratDph(unitId) {
 }
 
 // Kniha pohledávek a závazků — nesplacené faktury
-function knihaPohledavkyZavazky(unitId) {
-  return store.all(
+async function knihaPohledavkyZavazky(unitId) {
+  return await store.all(
     `SELECT d.id AS document_id, d.doc_type, d.doc_number, c.name AS protistrana,
             d.issue_date, d.due_date, d.total_amount, d.status,
             CAST(julianday('now') - julianday(d.due_date) AS INTEGER) AS dni_po_splatnosti

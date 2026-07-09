@@ -17,19 +17,19 @@ const DOC_PREFIX = {
 };
 
 // Nepřerušená číselná řada dokladů (§ 11 ZoÚ): {TYP}-{ROK}-{POŘADÍ}
-function generateDocumentNumber(unitId, docType, year) {
-  const existing = store.get(
+async function generateDocumentNumber(unitId, docType, year) {
+  const existing = await store.get(
     `SELECT last_number FROM document_number_sequence WHERE accounting_unit_id = ? AND doc_type = ? AND fiscal_year = ?`,
     [unitId, docType, year]
   );
   const next = (existing?.last_number || 0) + 1;
   if (existing) {
-    store.run(
+    await store.run(
       `UPDATE document_number_sequence SET last_number = ? WHERE accounting_unit_id = ? AND doc_type = ? AND fiscal_year = ?`,
       [next, unitId, docType, year]
     );
   } else {
-    store.run(
+    await store.run(
       `INSERT INTO document_number_sequence (accounting_unit_id, doc_type, fiscal_year, last_number) VALUES (?,?,?,?)`,
       [unitId, docType, year, next]
     );
@@ -38,19 +38,19 @@ function generateDocumentNumber(unitId, docType, year) {
 }
 
 // Nepřerušená číselná řada účetních zápisů
-function nextPostingNumber(unitId) {
-  const existing = store.get(`SELECT last_number FROM posting_number_sequence WHERE accounting_unit_id = ?`, [unitId]);
+async function nextPostingNumber(unitId) {
+  const existing = await store.get(`SELECT last_number FROM posting_number_sequence WHERE accounting_unit_id = ?`, [unitId]);
   const next = (existing?.last_number || 0) + 1;
   if (existing) {
-    store.run(`UPDATE posting_number_sequence SET last_number = ? WHERE accounting_unit_id = ?`, [next, unitId]);
+    await store.run(`UPDATE posting_number_sequence SET last_number = ? WHERE accounting_unit_id = ?`, [next, unitId]);
   } else {
-    store.run(`INSERT INTO posting_number_sequence (accounting_unit_id, last_number) VALUES (?,?)`, [unitId, next]);
+    await store.run(`INSERT INTO posting_number_sequence (accounting_unit_id, last_number) VALUES (?,?)`, [unitId, next]);
   }
   return next;
 }
 
-function writeAuditLog({ unitId, userId, action, table, entityId, before, after }) {
-  store.run(
+async function writeAuditLog({ unitId, userId, action, table, entityId, before, after }) {
+  await store.run(
     `INSERT INTO audit_log (accounting_unit_id, user_id, action, entity_table, entity_id, before_data, after_data)
      VALUES (?,?,?,?,?,?,?)`,
     [unitId || null, userId || null, action, table, entityId || null,
@@ -58,35 +58,35 @@ function writeAuditLog({ unitId, userId, action, table, entityId, before, after 
   );
 }
 
-function assertPeriodOpen(periodId) {
-  const period = store.get(`SELECT status FROM accounting_period WHERE id = ?`, [periodId]);
+async function assertPeriodOpen(periodId) {
+  const period = await store.get(`SELECT status FROM accounting_period WHERE id = ?`, [periodId]);
   if (!period) throw new Error("Účetní období neexistuje.");
   if (period.status === "uzavrene") throw new Error("Účetní období je uzavřené po inventarizaci — zápis není možný.");
 }
 
 // Jediný povolený způsob "zrušení" zaúčtovaného zápisu — nový, protichůdný
 // zápis (MD <-> D prohozeno), který odkazuje na původní přes storno_of_posting_id.
-function stornoPosting(postingId, reason, userId) {
-  const original = store.get(`SELECT * FROM posting WHERE id = ?`, [postingId]);
+async function stornoPosting(postingId, reason, userId) {
+  const original = await store.get(`SELECT * FROM posting WHERE id = ?`, [postingId]);
   if (!original) throw new Error("Účetní zápis nenalezen.");
 
-  const postingNumber = nextPostingNumber(original.accounting_unit_id);
-  store.run(
+  const postingNumber = await nextPostingNumber(original.accounting_unit_id);
+  await store.run(
     `INSERT INTO posting (accounting_unit_id, period_id, posting_number, document_id, posting_date, description, storno_of_posting_id, created_by)
      VALUES (?,?,?,?,?,?,?,?)`,
     [original.accounting_unit_id, original.period_id, postingNumber, null,
      new Date().toISOString().slice(0, 10), "STORNO: " + reason, postingId, userId]
   );
-  const newPostingId = store.get("SELECT last_insert_rowid() AS id").id;
+  const newPostingId = (await store.get("SELECT last_insert_rowid() AS id")).id;
 
-  const lines = store.all(`SELECT * FROM posting_line WHERE posting_id = ?`, [postingId]);
+  const lines = await store.all(`SELECT * FROM posting_line WHERE posting_id = ?`, [postingId]);
   for (const l of lines) {
-    store.run(
+    await store.run(
       `INSERT INTO posting_line (posting_id, account_id, side, amount, project_id) VALUES (?,?,?,?,?)`,
       [newPostingId, l.account_id, l.side === "MD" ? "D" : "MD", l.amount, l.project_id]
     );
   }
-  writeAuditLog({ unitId: original.accounting_unit_id, userId, action: "STORNO", table: "posting", entityId: postingId, after: { storno_posting_id: newPostingId, reason } });
+  await writeAuditLog({ unitId: original.accounting_unit_id, userId, action: "STORNO", table: "posting", entityId: postingId, after: { storno_posting_id: newPostingId, reason } });
   return newPostingId;
 }
 

@@ -29,14 +29,14 @@ const upload = multer({
 });
 
 // GET /api/documents?unit=1&status=koncept&docType=faktura_vydana
-router.get("/", (req, res) => {
+router.get("/", async (req, res) => {
   const { unit, status, docType } = req.query;
   try {
     let where = "accounting_unit_id = ?";
     const params = [unit];
     if (status) { where += " AND status = ?"; params.push(status); }
     if (docType) { where += " AND doc_type = ?"; params.push(docType); }
-    const rows = store.all(`SELECT * FROM document WHERE ${where} ORDER BY issue_date DESC, id DESC`, params);
+    const rows = await store.all(`SELECT * FROM document WHERE ${where} ORDER BY issue_date DESC, id DESC`, params);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -44,11 +44,11 @@ router.get("/", (req, res) => {
 });
 
 // GET /api/documents/:id
-router.get("/:id", (req, res) => {
+router.get("/:id", async (req, res) => {
   try {
-    const doc = store.get("SELECT * FROM document WHERE id = ?", [req.params.id]);
+    const doc = await store.get("SELECT * FROM document WHERE id = ?", [req.params.id]);
     if (!doc) return res.status(404).json({ error: "Doklad nenalezen" });
-    const lines = store.all("SELECT * FROM document_line WHERE document_id = ? ORDER BY line_no", [req.params.id]);
+    const lines = await store.all("SELECT * FROM document_line WHERE document_id = ? ORDER BY line_no", [req.params.id]);
     res.json({ ...doc, lines });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -56,7 +56,7 @@ router.get("/:id", (req, res) => {
 });
 
 // POST /api/documents — vytvoření nového dokladu (koncept). Číslo se generuje automaticky.
-router.post("/", (req, res) => {
+router.post("/", async (req, res) => {
   const {
     accounting_unit_id, doc_type, contact_id, project_id, period_id, variable_symbol,
     issue_date, taxable_supply_date, due_date, description, total_amount,
@@ -66,12 +66,12 @@ router.post("/", (req, res) => {
   } = req.body;
 
   try {
-    const doc = store.transaction(() => {
-      assertPeriodOpen(period_id);
+    const doc = await store.transaction(async () => {
+      await assertPeriodOpen(period_id);
       const year = new Date(issue_date).getFullYear();
-      const docNumber = generateDocumentNumber(accounting_unit_id, doc_type, year);
+      const docNumber = await generateDocumentNumber(accounting_unit_id, doc_type, year);
 
-      store.run(
+      await store.run(
         `INSERT INTO document
           (accounting_unit_id, doc_type, doc_number, variable_symbol, contact_id, project_id, period_id,
            issue_date, taxable_supply_date, due_date, description, total_amount,
@@ -83,19 +83,20 @@ router.post("/", (req, res) => {
          is_vat_document ? 1 : 0, vat_base_amount || null, vat_rate || null, vat_amount || null, counterparty_dic || null,
          responsible_user_id, cash_payee_name || null, cash_payee_address || null, cash_payee_id_number || null]
       );
-      const docId = store.get("SELECT last_insert_rowid() AS id").id;
+      const docId = (await store.get("SELECT last_insert_rowid() AS id")).id;
 
       if (Array.isArray(lines)) {
-        lines.forEach((l, i) => {
-          store.run(
+        for (let i = 0; i < lines.length; i++) {
+          const l = lines[i];
+          await store.run(
             `INSERT INTO document_line (document_id, line_no, description, quantity, unit_price, vat_rate, line_amount, suggested_account_id)
              VALUES (?,?,?,?,?,?,?,?)`,
             [docId, i + 1, l.description, l.quantity || 1, l.unit_price, l.vat_rate || null, l.line_amount, l.suggested_account_id || null]
           );
-        });
+        }
       }
 
-      writeAuditLog({ unitId: accounting_unit_id, userId: responsible_user_id, action: "INSERT", table: "document", entityId: docId, after: { doc_number: docNumber, total_amount } });
+      await writeAuditLog({ unitId: accounting_unit_id, userId: responsible_user_id, action: "INSERT", table: "document", entityId: docId, after: { doc_number: docNumber, total_amount } });
 
       return store.get("SELECT * FROM document WHERE id = ?", [docId]);
     });
@@ -106,35 +107,35 @@ router.post("/", (req, res) => {
 });
 
 // POST /api/documents/:id/approve — schválení (odpovědná osoba za zaúčtování, § 11 ZoÚ)
-router.post("/:id/approve", (req, res) => {
+router.post("/:id/approve", async (req, res) => {
   const { approved_by } = req.body;
   try {
-    const before = store.get("SELECT * FROM document WHERE id = ? AND status = 'koncept'", [req.params.id]);
+    const before = await store.get("SELECT * FROM document WHERE id = ? AND status = 'koncept'", [req.params.id]);
     if (!before) return res.status(400).json({ error: "Doklad nelze schválit — buď neexistuje, nebo už není v konceptu." });
 
-    store.transaction(() => {
-      store.run("UPDATE document SET status = 'schvaleny', approved_by = ?, approved_at = datetime('now') WHERE id = ?", [approved_by, req.params.id]);
-      writeAuditLog({ unitId: before.accounting_unit_id, userId: approved_by, action: "APPROVE", table: "document", entityId: req.params.id, before, after: { status: "schvaleny" } });
+    await store.transaction(async () => {
+      await store.run("UPDATE document SET status = 'schvaleny', approved_by = ?, approved_at = datetime('now') WHERE id = ?", [approved_by, req.params.id]);
+      await writeAuditLog({ unitId: before.accounting_unit_id, userId: approved_by, action: "APPROVE", table: "document", entityId: req.params.id, before, after: { status: "schvaleny" } });
     });
-    res.json(store.get("SELECT * FROM document WHERE id = ?", [req.params.id]));
+    res.json(await store.get("SELECT * FROM document WHERE id = ?", [req.params.id]));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
 // POST /api/documents/:id/storno — stornování dokladu (nemaže, jen mění stav a zaznamená důvod)
-router.post("/:id/storno", (req, res) => {
+router.post("/:id/storno", async (req, res) => {
   const { reason, user_id } = req.body;
   try {
-    const before = store.get("SELECT * FROM document WHERE id = ?", [req.params.id]);
+    const before = await store.get("SELECT * FROM document WHERE id = ?", [req.params.id]);
     if (!before) return res.status(404).json({ error: "Doklad nenalezen" });
     if (before.status === "stornovany") return res.status(400).json({ error: "Doklad je již stornovaný." });
 
-    store.transaction(() => {
-      store.run("UPDATE document SET status = 'stornovany' WHERE id = ?", [req.params.id]);
-      writeAuditLog({ unitId: before.accounting_unit_id, userId: user_id, action: "STORNO", table: "document", entityId: req.params.id, before, after: { status: "stornovany", reason } });
+    await store.transaction(async () => {
+      await store.run("UPDATE document SET status = 'stornovany' WHERE id = ?", [req.params.id]);
+      await writeAuditLog({ unitId: before.accounting_unit_id, userId: user_id, action: "STORNO", table: "document", entityId: req.params.id, before, after: { status: "stornovany", reason } });
     });
-    res.json(store.get("SELECT * FROM document WHERE id = ?", [req.params.id]));
+    res.json(await store.get("SELECT * FROM document WHERE id = ?", [req.params.id]));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -144,19 +145,19 @@ router.post("/:id/storno", (req, res) => {
 // předkontace (template_id). Ze šablony se odvodí účty MD/D a částky se
 // naplní z dokladu (celková částka / základ DPH / výše DPH). Jedno kliknutí
 // místo ručního zápisu — tak, jak to dělá Pohoda i Money S3.
-router.post("/:id/post", (req, res) => {
+router.post("/:id/post", async (req, res) => {
   const { template_id, created_by } = req.body;
   try {
-    const posting = store.transaction(() => {
-      const doc = store.get("SELECT * FROM document WHERE id = ?", [req.params.id]);
+    const posting = await store.transaction(async () => {
+      const doc = await store.get("SELECT * FROM document WHERE id = ?", [req.params.id]);
       if (!doc) throw new Error("Doklad nenalezen.");
       if (doc.status === "zauctovany") throw new Error("Doklad je již zaúčtovaný.");
       if (doc.status === "stornovany") throw new Error("Stornovaný doklad nelze zaúčtovat.");
-      assertPeriodOpen(doc.period_id);
+      await assertPeriodOpen(doc.period_id);
 
-      const tpl = store.get("SELECT * FROM posting_template WHERE id = ? AND accounting_unit_id = ?", [template_id, doc.accounting_unit_id]);
+      const tpl = await store.get("SELECT * FROM posting_template WHERE id = ? AND accounting_unit_id = ?", [template_id, doc.accounting_unit_id]);
       if (!tpl) throw new Error("Předkontace nenalezena.");
-      const tplLines = store.all("SELECT * FROM posting_template_line WHERE template_id = ?", [template_id]);
+      const tplLines = await store.all("SELECT * FROM posting_template_line WHERE template_id = ?", [template_id]);
 
       const amountFor = (src) => {
         if (src === "zaklad") return doc.vat_base_amount || 0;
@@ -172,19 +173,19 @@ router.post("/:id/post", (req, res) => {
         throw new Error(`Předkontace by vytvořila nevyrovnaný zápis: MD = ${md.toFixed(2)}, D = ${d.toFixed(2)}. Zkontrolujte šablonu a DPH pole dokladu.`);
       }
 
-      const postingNumber = nextPostingNumber(doc.accounting_unit_id);
-      store.run(
+      const postingNumber = await nextPostingNumber(doc.accounting_unit_id);
+      await store.run(
         `INSERT INTO posting (accounting_unit_id, period_id, posting_number, document_id, posting_date, description, created_by)
          VALUES (?,?,?,?,?,?,?)`,
         [doc.accounting_unit_id, doc.period_id, postingNumber, doc.id, doc.issue_date, `${doc.doc_number}: ${doc.description}`, created_by]
       );
-      const postingId = store.get("SELECT last_insert_rowid() AS id").id;
+      const postingId = (await store.get("SELECT last_insert_rowid() AS id")).id;
       for (const l of lines) {
-        store.run(`INSERT INTO posting_line (posting_id, account_id, side, amount, project_id) VALUES (?,?,?,?,?)`,
+        await store.run(`INSERT INTO posting_line (posting_id, account_id, side, amount, project_id) VALUES (?,?,?,?,?)`,
           [postingId, l.account_id, l.side, l.amount, doc.project_id || null]);
       }
-      store.run("UPDATE document SET status = 'zauctovany' WHERE id = ?", [doc.id]);
-      writeAuditLog({ unitId: doc.accounting_unit_id, userId: created_by, action: "POST", table: "document", entityId: doc.id, after: { posting_id: postingId, template: tpl.name } });
+      await store.run("UPDATE document SET status = 'zauctovany' WHERE id = ?", [doc.id]);
+      await writeAuditLog({ unitId: doc.accounting_unit_id, userId: created_by, action: "POST", table: "document", entityId: doc.id, after: { posting_id: postingId, template: tpl.name } });
       return store.get("SELECT * FROM posting WHERE id = ?", [postingId]);
     });
     res.status(201).json(posting);
@@ -198,16 +199,16 @@ router.post("/:id/post", (req, res) => {
 // IBAN dodavatele (úhrada dodavateli).
 router.get("/:id/qr", async (req, res) => {
   try {
-    const doc = store.get("SELECT * FROM document WHERE id = ?", [req.params.id]);
+    const doc = await store.get("SELECT * FROM document WHERE id = ?", [req.params.id]);
     if (!doc) return res.status(404).json({ error: "Doklad nenalezen" });
 
     let iban, message;
     if (doc.doc_type === "faktura_prijata") {
-      const contact = doc.contact_id ? store.get("SELECT iban, bank_account FROM contact WHERE id = ?", [doc.contact_id]) : null;
+      const contact = doc.contact_id ? await store.get("SELECT iban, bank_account FROM contact WHERE id = ?", [doc.contact_id]) : null;
       iban = contact?.iban;
       message = "Uhrada " + doc.doc_number;
     } else {
-      const unit = store.get("SELECT iban FROM accounting_unit WHERE id = ?", [doc.accounting_unit_id]);
+      const unit = await store.get("SELECT iban FROM accounting_unit WHERE id = ?", [doc.accounting_unit_id]);
       iban = unit?.iban;
       message = doc.description;
     }
@@ -225,30 +226,30 @@ router.get("/:id/qr", async (req, res) => {
 });
 
 // POST /api/documents/:id/attachments — upload PDF/CSV k existujícímu dokladu
-router.post("/:id/attachments", (req, res) => {
-  const doc = store.get("SELECT id FROM document WHERE id = ?", [req.params.id]);
+router.post("/:id/attachments", async (req, res) => {
+  const doc = await store.get("SELECT id FROM document WHERE id = ?", [req.params.id]);
   if (!doc) return res.status(404).json({ error: "Doklad nenalezen" });
 
-  upload.single("file")(req, res, (err) => {
+  upload.single("file")(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: "Žádný soubor nebyl nahrán." });
     try {
-      store.run(
+      await store.run(
         `INSERT INTO document_attachment (document_id, file_name, mime_type, file_path, size_bytes)
          VALUES (?,?,?,?,?)`,
         [req.params.id, req.file.originalname, req.file.mimetype, req.file.path, req.file.size]
       );
-      const id = store.get("SELECT last_insert_rowid() AS id").id;
+      const id = (await store.get("SELECT last_insert_rowid() AS id")).id;
       store.persist();
-      res.status(201).json(store.get("SELECT id, document_id, file_name, mime_type, size_bytes, uploaded_at FROM document_attachment WHERE id = ?", [id]));
+      res.status(201).json(await store.get("SELECT id, document_id, file_name, mime_type, size_bytes, uploaded_at FROM document_attachment WHERE id = ?", [id]));
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
 });
 
 // GET /api/documents/:id/attachments — seznam příloh dokladu
-router.get("/:id/attachments", (req, res) => {
+router.get("/:id/attachments", async (req, res) => {
   try {
-    const rows = store.all(
+    const rows = await store.all(
       "SELECT id, document_id, file_name, mime_type, size_bytes, uploaded_at FROM document_attachment WHERE document_id = ? ORDER BY uploaded_at DESC",
       [req.params.id]
     );
@@ -257,9 +258,9 @@ router.get("/:id/attachments", (req, res) => {
 });
 
 // GET /api/documents/attachments/:attachmentId/download — stažení přílohy
-router.get("/attachments/:attachmentId/download", (req, res) => {
+router.get("/attachments/:attachmentId/download", async (req, res) => {
   try {
-    const attachment = store.get("SELECT * FROM document_attachment WHERE id = ?", [req.params.attachmentId]);
+    const attachment = await store.get("SELECT * FROM document_attachment WHERE id = ?", [req.params.attachmentId]);
     if (!attachment) return res.status(404).json({ error: "Příloha nenalezena" });
     if (!fs.existsSync(attachment.file_path)) return res.status(404).json({ error: "Soubor přílohy chybí na disku." });
     res.setHeader("Content-Type", attachment.mime_type);

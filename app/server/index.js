@@ -1,6 +1,8 @@
 // =====================================================================
-// index.js — sestavení Express aplikace. Volá se z Electron main procesu
-// (start(userDataDir, port)) i samostatně přes `node server/index.js`
+// index.js — sestavení Express aplikace. buildApp() vrací appku bez
+// listen() (použije Vercel serverless entry point, viz ../../api/index.js);
+// start(userDataDir, port) navíc appku spustí na loopbacku — volá se
+// z Electron main procesu i samostatně přes `node server/index.js`
 // pro vývoj/testování bez Electronu (viz package.json → "dev:server").
 // =====================================================================
 const express = require("express");
@@ -11,21 +13,21 @@ const { ensureChartOfAccounts } = require("./lib/chartOfAccountsSeed");
 const { ensureCompanyDirectors, fixPlaceholderIco } = require("./lib/companySetup");
 const { requireAuth } = require("./lib/auth");
 
-async function start(userDataDir, port) {
+async function buildApp(userDataDir) {
   await store.init(userDataDir);
-  seed();
-  ensureChartOfAccounts(store); // doplní nové účty i do dříve nainstalovaných appek
-  fixPlaceholderIco(store);
-  ensureCompanyDirectors(store);
+  await seed();
+  await ensureChartOfAccounts(store); // doplní nové účty i do dříve nainstalovaných appek
+  await fixPlaceholderIco(store);
+  await ensureCompanyDirectors(store);
   store.persist();
 
   const app = express();
   app.use(express.json());
 
-  // Renderer se v Electronu načítá přes file:// (origin "null"), takže i
-  // volání na 127.0.0.1 je cross-origin a bez CORS hlaviček by ho prohlížeč
-  // zablokoval. Přihlašování jede přes Bearer token (Authorization header),
-  // ne cookie, takže Allow-Credentials/echo originu tu není potřeba.
+  // Renderer se v Electronu načítá přes file:// (origin "null"), na webu je
+  // to stejný origin jako statický frontend. Přihlašování jede přes Bearer
+  // token (Authorization header), ne cookie, takže Allow-Credentials/echo
+  // originu tu není potřeba.
   app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin", "*");
     res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
@@ -63,6 +65,11 @@ async function start(userDataDir, port) {
 
   app.get("/health", (req, res) => res.json({ status: "ok" }));
 
+  return app;
+}
+
+async function start(userDataDir, port) {
+  const app = await buildApp(userDataDir);
   return new Promise((resolve) => {
     const server = app.listen(port, "127.0.0.1", () => resolve(server));
   });
@@ -77,4 +84,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { start };
+module.exports = { start, buildApp };

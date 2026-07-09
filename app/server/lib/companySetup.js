@@ -9,17 +9,17 @@ const KNOWN_DIRECTORS = {
   "24972070": ["Jakub Lučan", "Jan Leština", "Štěpán Lísa"],
 };
 
-function ensureCompanyDirectors(store) {
-  const units = store.all("SELECT id, ico FROM accounting_unit");
+async function ensureCompanyDirectors(store) {
+  const units = await store.all("SELECT id, ico FROM accounting_unit");
   for (const unit of units) {
     const directors = KNOWN_DIRECTORS[unit.ico];
     if (!directors) continue;
     const existing = new Set(
-      store.all("SELECT full_name FROM company_director WHERE accounting_unit_id = ?", [unit.id]).map((r) => r.full_name)
+      (await store.all("SELECT full_name FROM company_director WHERE accounting_unit_id = ?", [unit.id])).map((r) => r.full_name)
     );
     for (const name of directors) {
       if (!existing.has(name)) {
-        store.run("INSERT INTO company_director (accounting_unit_id, full_name) VALUES (?,?)", [unit.id, name]);
+        await store.run("INSERT INTO company_director (accounting_unit_id, full_name) VALUES (?,?)", [unit.id, name]);
       }
     }
   }
@@ -28,8 +28,8 @@ function ensureCompanyDirectors(store) {
 
 // Oprava placeholder IČO "00000000" použitého v dřívějším seed.js na reálné
 // IČO ze živnostenského rejstříku — nutné, aby DIČ i BankID/ARES ověření dávalo smysl.
-function fixPlaceholderIco(store) {
-  store.run(
+async function fixPlaceholderIco(store) {
+  await store.run(
     "UPDATE accounting_unit SET ico = '24972070' WHERE ico = '00000000' AND dic = 'CZ24972070'"
   );
   store.persist();

@@ -115,25 +115,25 @@ const ACCOUNTS = [
 
 // Vloží účty (v pořadí bez rodičů, pak s rodiči) pro danou accounting_unit_id.
 // Vrací mapu account_number -> id (pro navázání analytických podúčtů a šablon).
-function insertAccounts(store, unitId) {
+async function insertAccounts(store, unitId) {
   const acctIds = {};
   const withoutParent = ACCOUNTS.filter((a) => !a[4]);
   const withParent = ACCOUNTS.filter((a) => a[4]);
   for (const [number, name, cls, type] of withoutParent) {
-    store.run(
+    await store.run(
       `INSERT INTO chart_of_accounts (accounting_unit_id, account_number, name, account_class, account_type)
        VALUES (?,?,?,?,?)`,
       [unitId, number, name, cls, type]
     );
-    acctIds[number] = store.get("SELECT last_insert_rowid() AS id").id;
+    acctIds[number] = (await store.get("SELECT last_insert_rowid() AS id")).id;
   }
   for (const [number, name, cls, type, parentNumber] of withParent) {
-    store.run(
+    await store.run(
       `INSERT INTO chart_of_accounts (accounting_unit_id, account_number, parent_account_id, name, account_class, account_type)
        VALUES (?,?,?,?,?,?)`,
       [unitId, number, acctIds[parentNumber] || null, name, cls, type]
     );
-    acctIds[number] = store.get("SELECT last_insert_rowid() AS id").id;
+    acctIds[number] = (await store.get("SELECT last_insert_rowid() AS id")).id;
   }
   return acctIds;
 }
@@ -141,32 +141,32 @@ function insertAccounts(store, unitId) {
 // Idempotentně doplní chybějící účty pro VŠECHNY existující účetní jednotky
 // (spouštěno při každém startu serveru) — nové účty se tak dostanou i do
 // appky, která už byla dříve nainstalovaná a osazená staršími seed daty.
-function ensureChartOfAccounts(store) {
-  const units = store.all("SELECT id FROM accounting_unit");
+async function ensureChartOfAccounts(store) {
+  const units = await store.all("SELECT id FROM accounting_unit");
   for (const unit of units) {
     const existingNumbers = new Set(
-      store.all("SELECT account_number FROM chart_of_accounts WHERE accounting_unit_id = ?", [unit.id])
+      (await store.all("SELECT account_number FROM chart_of_accounts WHERE accounting_unit_id = ?", [unit.id]))
         .map((r) => r.account_number)
     );
     const missingWithoutParent = ACCOUNTS.filter((a) => !a[4] && !existingNumbers.has(a[0]));
     const missingWithParent = ACCOUNTS.filter((a) => a[4] && !existingNumbers.has(a[0]));
     if (!missingWithoutParent.length && !missingWithParent.length) continue;
 
-    store.transaction(() => {
+    await store.transaction(async () => {
       const parentIds = {};
       for (const [number, name, cls, type] of missingWithoutParent) {
-        store.run(
+        await store.run(
           `INSERT INTO chart_of_accounts (accounting_unit_id, account_number, name, account_class, account_type)
            VALUES (?,?,?,?,?)`,
           [unit.id, number, name, cls, type]
         );
       }
       for (const [number, name, cls, type, parentNumber] of missingWithParent) {
-        const parentRow = store.get(
+        const parentRow = await store.get(
           "SELECT id FROM chart_of_accounts WHERE accounting_unit_id = ? AND account_number = ?",
           [unit.id, parentNumber]
         );
-        store.run(
+        await store.run(
           `INSERT INTO chart_of_accounts (accounting_unit_id, account_number, parent_account_id, name, account_class, account_type)
            VALUES (?,?,?,?,?,?)`,
           [unit.id, number, parentRow ? parentRow.id : null, name, cls, type]

@@ -8,9 +8,14 @@
 </head>
 <body>
   <script>
-    // Mimo Electron (preload.js) tento shim umožňuje ruční prohlížení UI
-    // proti API spuštěnému přes `npm run dev:server` (viz package.json).
-    if (!window.ucetnictvi) window.ucetnictvi = { apiBase: "http://127.0.0.1:4000/api" };
+    // preload.js (Electron) nastaví window.ucetnictvi ještě před načtením
+    // téhle stránky — tady se řeší jen zbylé dva případy: `npm run
+    // dev:renderer` (statický server na :5173 proti `npm run dev:server`
+    // na :4000), a skutečné webové nasazení (Vercel), kde API běží na
+    // stejné doméně pod relativní cestou /api.
+    if (!window.ucetnictvi) {
+      window.ucetnictvi = { apiBase: location.port === "5173" ? "http://127.0.0.1:4000/api" : "/api" };
+    }
   </script>
   <div id="authScreen" class="auth-screen hidden"></div>
   <div id="app" class="hidden">
