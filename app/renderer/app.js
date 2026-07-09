@@ -76,6 +76,10 @@ function renderAuthScreen() {
         ${tabs.map(([id, label]) => `<button type="button" class="small ${AUTH_TAB === id ? "active" : ""}" data-action="auth-tab" data-tab="${id}">${label}</button>`).join("")}
       </div>
       <div id="authTabBody"></div>
+      <div class="text-dim" style="font-size:11.5px;margin-top:20px;text-align:center">
+        <a href="/tos" target="_blank" style="color:inherit">Podmínky užití</a> ·
+        <a href="/privacy-policy" target="_blank" style="color:inherit">Ochrana osobních údajů</a>
+      </div>
     </div>
   `;
   renderAuthTabBody();

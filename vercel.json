@@ -2,6 +2,9 @@
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/", "destination": "/app/renderer/index.html" },
+    { "source": "/login", "destination": "/app/renderer/index.html" },
+    { "source": "/tos", "destination": "/app/renderer/tos.html" },
+    { "source": "/privacy-policy", "destination": "/app/renderer/privacy-policy.html" },
     { "source": "/app.js", "destination": "/app/renderer/app.js" },
     { "source": "/style.css", "destination": "/app/renderer/style.css" }
   ]
