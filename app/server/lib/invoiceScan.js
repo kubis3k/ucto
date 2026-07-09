@@ -8,17 +8,15 @@
 // instalaci/výkon) — vrací se prázdná extrakce, doklad lze přiložit a
 // pole doplnit ručně.
 // =====================================================================
-const { PDFParse } = require("pdf-parse");
+// pdf-parse@1.x (klasické API, ne novější PDFParse třída z 2.x) — 2.x interně
+// zapojuje pdfjs-dist cestu, která vyžaduje browser globals (DOMMatrix apod.)
+// nedostupné v serverless Node runtime (Vercel), viz ověřeno end-to-end.
+const pdfParse = require("pdf-parse");
 
 async function extractText(buffer, mimeType) {
   if (mimeType === "application/pdf") {
-    const parser = new PDFParse({ data: buffer });
-    try {
-      const result = await parser.getText();
-      return result.text || "";
-    } finally {
-      await parser.destroy();
-    }
+    const result = await pdfParse(buffer);
+    return result.text || "";
   }
   return ""; // obrázky — bez OCR v této verzi
 }
