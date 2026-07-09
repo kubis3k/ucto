@@ -74,6 +74,8 @@ async function migrate() {
   await ensureColumn("app_user", "password_hash", "TEXT");
   await ensureColumn("app_user", "bankid_verified", "INTEGER NOT NULL DEFAULT 0");
   await ensureColumn("app_user", "bankid_sub", "TEXT");
+  // Přímé zaúčtování bankovního/pokladního pohybu bez dokladu (poplatky, úroky).
+  await ensureColumn("bank_statement_line", "posting_id", "INTEGER");
 }
 
 function persist() {

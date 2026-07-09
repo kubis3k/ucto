@@ -255,7 +255,19 @@ CREATE TABLE IF NOT EXISTS bank_statement_line (
     counterparty_name   TEXT,
     variable_symbol     TEXT,
     matched_document_id INTEGER REFERENCES document(id),
+    posting_id          INTEGER REFERENCES posting(id),
     imported_at         TEXT NOT NULL DEFAULT (now()::text)
+);
+ALTER TABLE bank_statement_line ADD COLUMN IF NOT EXISTS posting_id INTEGER REFERENCES posting(id);
+
+CREATE TABLE IF NOT EXISTS bank_category_rule (
+    id                  SERIAL PRIMARY KEY,
+    accounting_unit_id  INTEGER NOT NULL REFERENCES accounting_unit(id),
+    match_text          TEXT NOT NULL,
+    account_id          INTEGER NOT NULL REFERENCES chart_of_accounts(id),
+    hits                INTEGER NOT NULL DEFAULT 1,
+    updated_at          TEXT NOT NULL DEFAULT (now()::text),
+    UNIQUE (accounting_unit_id, match_text)
 );
 
 CREATE TABLE IF NOT EXISTS inventory_check (

@@ -51,6 +51,21 @@ async function api(method, path, body) {
   return ct.includes("application/json") ? res.json() : res.text();
 }
 
+// Multipart upload (sken faktury, přílohy) — na rozdíl od api() nenastavuje
+// Content-Type ručně, ať si prohlížeč sám doplní boundary pro FormData.
+async function apiUpload(path, formData) {
+  const headers = {};
+  const token = authToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${API}${path}`, { method: "POST", headers, body: formData });
+  if (!res.ok) {
+    let msg = res.statusText;
+    try { msg = (await res.json()).error || msg; } catch (_) {}
+    throw new Error(msg);
+  }
+  return res.json();
+}
+
 function toast(message, type = "success") {
   const el = document.getElementById("toast");
   el.textContent = message;
@@ -652,6 +667,14 @@ function documentFormModal() {
   const period = currentOpenPeriod();
   showModal(`
     <h2>Nový doklad</h2>
+    <div class="scan-box">
+      <label>Naskenovat fakturu (PDF/PNG/JPG) — pole se předvyplní automaticky</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="file" id="scanFile" accept=".pdf,.png,.jpg,.jpeg" style="flex:1" />
+        <button type="button" class="secondary" data-action="scan-invoice">Naskenovat</button>
+      </div>
+      <div id="scanStatus" class="text-dim" style="font-size:12px;margin-top:6px"></div>
+    </div>
     <form data-form="create-document">
       <div class="form-grid">
         <div><label>Typ dokladu</label>
@@ -697,10 +720,81 @@ async function handleCreateDocument(form) {
   body.is_vat_document = fd.get("is_vat_document") === "on";
   body.total_amount = Number(body.total_amount);
   ["vat_base_amount", "vat_rate", "vat_amount"].forEach((k) => { if (body[k]) body[k] = Number(body[k]); });
-  await api("POST", "/documents", body);
+  const doc = await api("POST", "/documents", body);
+
+  // Naskenovaný soubor (pokud byl vybrán) se připojí jako příloha k právě vytvořenému dokladu.
+  const fileInput = document.getElementById("scanFile");
+  if (fileInput?.files?.[0]) {
+    try {
+      const uploadFd = new FormData();
+      uploadFd.append("file", fileInput.files[0]);
+      await apiUpload(`/documents/${doc.id}/attachments`, uploadFd);
+    } catch (err) {
+      toast("Doklad vytvořen, přílohu se ale nepodařilo uložit: " + err.message, "error");
+    }
+  }
+
   toast("Doklad byl vytvořen jako koncept.");
   closeModal();
   renderDocuments();
+}
+
+// Odešle vybraný soubor na /documents/scan a předvyplní jím pole formuláře.
+// Podle rozpoznaného IČO dodavatele navíc nabídne rychlé založení kontaktu z ARES.
+async function scanInvoiceDocument() {
+  const fileInput = document.getElementById("scanFile");
+  const status = document.getElementById("scanStatus");
+  const file = fileInput?.files?.[0];
+  if (!file) { status.textContent = "Nejprve vyberte soubor."; return; }
+
+  status.textContent = "Rozpoznávám doklad…";
+  try {
+    const uploadFd = new FormData();
+    uploadFd.append("file", file);
+    const { fields, ocr_supported } = await apiUpload("/documents/scan", uploadFd);
+    const form = document.querySelector('[data-form="create-document"]');
+
+    const map = {
+      issue_date: "issue_date", due_date: "due_date", taxable_supply_date: "taxable_supply_date",
+      variable_symbol: "variable_symbol", total_amount: "total_amount", supplier_dic: "counterparty_dic",
+    };
+    let filled = 0;
+    for (const [srcKey, formField] of Object.entries(map)) {
+      if (fields[srcKey] != null) {
+        const el = form.querySelector(`[name="${formField}"]`);
+        if (el) { el.value = fields[srcKey]; filled++; }
+      }
+    }
+    if (fields.supplier_dic) form.querySelector('[name="is_vat_document"]').checked = true;
+    if (!form.querySelector('[name="description"]').value) {
+      form.querySelector('[name="description"]').value = fields.doc_number_hint
+        ? `Faktura č. ${fields.doc_number_hint}` : "Naskenovaná faktura";
+    }
+
+    if (!ocr_supported) {
+      status.textContent = "Obrázky (PNG/JPG) zatím nejdou automaticky přečíst — doklad se ale přiloží, pole doplňte ručně.";
+      return;
+    }
+
+    let note = filled ? `Rozpoznáno a předvyplněno ${filled} polí.` : "Z dokladu se nepodařilo rozpoznat žádné pole — doplňte ručně.";
+
+    // Dohledání dodavatele v ARES podle rozpoznaného IČO — přesnější než parsování jména z PDF.
+    if (fields.supplier_ico) {
+      try {
+        const ares = await api("GET", `/ares/${fields.supplier_ico}`);
+        const existing = STATE._contacts?.find((c) => c.ico === fields.supplier_ico);
+        if (existing) {
+          form.querySelector('[name="contact_id"]').value = existing.id;
+          note += ` Dodavatel „${ares.name}" nalezen mezi kontakty.`;
+        } else {
+          note += ` Dodavatel v ARES: „${ares.name}" (IČO ${fields.supplier_ico}) — zatím nemáte jako kontakt.`;
+        }
+      } catch (_) { /* ARES nedostupné — pole IČO necháváme jen jako informaci ve status textu */ }
+    }
+    status.textContent = note;
+  } catch (err) {
+    status.textContent = "Nepodařilo se rozpoznat doklad: " + err.message;
+  }
 }
 
 // Detail dokladu + QR platba (SPD). Tlačítko "Tisk" otevře systémový dialog tisku.
@@ -1268,29 +1362,58 @@ async function handleCreateProject(form) {
 // =====================================================================
 async function renderBank() {
   const unit = STATE.unit.id;
-  const lines = await api("GET", `/bank?unit=${unit}`);
-  const docs = await api("GET", `/documents?unit=${unit}`);
+  const [lines, docs, cashflow, categorySuggestions] = await Promise.all([
+    api("GET", `/bank?unit=${unit}`),
+    api("GET", `/documents?unit=${unit}`),
+    api("GET", `/bank/cashflow?unit=${unit}`),
+    api("GET", `/bank/suggest-categories?unit=${unit}`),
+  ]);
+  await refreshCoreState();
+  STATE._bankCategorySuggestions = Object.fromEntries(categorySuggestions.map((s) => [s.bank_line_id, s]));
+
   document.getElementById("topbarActions").innerHTML = `
     <button class="secondary" data-action="import-bank">Importovat výpis (CSV/XML)</button>
     <button data-action="new-bank-line">+ Zadat pohyb</button>`;
-  const unmatched = lines.filter((l) => !l.matched_document_id).length;
+  const unmatched = lines.filter((l) => !l.matched_document_id && !l.posting_id).length;
+
+  const acctName = (num) => STATE.accounts.find((a) => a.account_number === num)?.name || "";
+  const cashCards = cashflow.by_account.map((a) => `
+    <div class="kpi ${a.balance < 0 ? "bad" : "good"}">
+      <div class="label">Zůstatek — ${esc(a.bank_account)} ${esc(acctName(a.bank_account))}</div>
+      <div class="value">${fmtMoney(a.balance)}</div>
+    </div>`).join("");
+
   document.getElementById("view").innerHTML = `
+    <div class="kpi-grid">
+      ${cashCards}
+      <div class="kpi good"><div class="label">Příjmy za 30 dní</div><div class="value">${fmtMoney(cashflow.last30.income)}</div></div>
+      <div class="kpi bad"><div class="label">Výdaje za 30 dní</div><div class="value">${fmtMoney(cashflow.last30.expense)}</div></div>
+    </div>
     <div class="panel">
       <div class="toolbar">
-        <p class="text-dim" style="margin:0;flex:1">Bankovní a hotovostní pohyby s párováním na doklady. Importuj výpis z banky (CSV nebo camt.053 XML) a spáruj řádky s doklady.</p>
+        <p class="text-dim" style="margin:0;flex:1">Bankovní a hotovostní pohyby s párováním na doklady. Importuj výpis z banky (CSV nebo camt.053 XML) — nespárované pohyby bez dokladu (poplatky, úroky) systém sám navrhne zaúčtovat podle naučených pravidel.</p>
         ${unmatched ? `<button class="small secondary" data-action="suggest-matches">Navrhnout párování (${unmatched})</button>` : ""}
       </div>
       <div id="matchSuggestions"></div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Datum</th><th>Účet</th><th class="num">Částka</th><th>Protistrana</th><th>VS</th><th>Spárováno</th><th></th></tr></thead>
-        <tbody>${lines.length ? lines.map((l) => `
+        <thead><tr><th>Datum</th><th>Účet</th><th class="num">Částka</th><th>Protistrana</th><th>VS</th><th>Stav</th><th></th></tr></thead>
+        <tbody>${lines.length ? lines.map((l) => {
+          const booked = l.matched_document_id || l.posting_id;
+          const suggestion = STATE._bankCategorySuggestions[l.id];
+          return `
           <tr><td>${fmtDate(l.statement_date)}</td><td>${esc(l.bank_account)}</td>
             <td class="num" style="color:${l.amount >= 0 ? 'var(--green)' : 'var(--red)'}">${fmtMoney(l.amount)}</td>
             <td>${esc(l.counterparty_name || "—")}</td><td class="mono">${esc(l.variable_symbol || "—")}</td>
-            <td>${l.matched_document_id ? `<span class="badge zauctovany">ano</span>` : `<span class="badge koncept">ne</span>`}</td>
-            <td>${!l.matched_document_id ? `<select class="small" data-match-id="${l.id}" style="width:auto;display:inline-block">
-                <option value="">Spárovat s dokladem…</option>${docs.map((d) => `<option value="${d.id}">${esc(d.doc_number)} (${fmtMoney(d.total_amount)})</option>`).join("")}
-              </select>` : "—"}</td></tr>`).join("")
+            <td>${booked ? `<span class="badge zauctovany">zaúčtováno</span>` : `<span class="badge koncept">nezaúčtováno</span>`}</td>
+            <td>${booked ? "—" : `
+                <select class="small" data-match-id="${l.id}" style="width:auto;display:inline-block">
+                  <option value="">Spárovat s dokladem…</option>${docs.map((d) => `<option value="${d.id}">${esc(d.doc_number)} (${fmtMoney(d.total_amount)})</option>`).join("")}
+                </select>
+                ${suggestion
+                  ? `<button class="small" data-action="quick-post-suggested" data-id="${l.id}" data-account="${suggestion.account_id}" title="Návrh podle ${esc(suggestion.source)}">⚡ ${esc(suggestion.account_number)} ${esc(acctName(suggestion.account_number))}</button>`
+                  : `<button class="small secondary" data-action="quick-post-manual" data-id="${l.id}">Zaúčtovat…</button>`}
+              `}</td></tr>`;
+        }).join("")
           : `<tr><td colspan="7" class="empty-state">Zatím žádné bankovní/pokladní pohyby.</td></tr>`}
         </tbody>
       </table></div>
@@ -1304,6 +1427,39 @@ async function renderBank() {
       renderBank();
     };
   });
+}
+
+// Zaúčtování pohybu bez dokladu jedním klikem podle navrženého (naučeného
+// nebo klíčovým slovem odvozeného) účtu.
+async function quickPostSuggested(lineId, accountId) {
+  try {
+    await api("POST", `/bank/${lineId}/quick-post`, { account_id: accountId, created_by: STATE.user.id });
+    toast("Pohyb byl zaúčtován podle návrhu.");
+    renderBank();
+  } catch (err) { toast(err.message, "error"); }
+}
+
+// Ruční výběr účtu, když systém nemá žádný návrh (nová/neznámá protistrana) —
+// vybraný účet se zapamatuje pro příště (viz naučená pravidla na backendu).
+function quickPostManualModal(lineId) {
+  showModal(`
+    <h2>Zaúčtovat pohyb</h2>
+    <p class="text-dim">Vyberte účet pro druhou stranu zápisu (bankovní/pokladní účet je doplněn automaticky). Volbu si systém zapamatuje pro tuto protistranu.</p>
+    <form data-form="quick-post-manual" data-line-id="${lineId}">
+      <label>Účet</label>
+      <select name="account_id" required>${accountOptions()}</select>
+      <div class="form-actions">
+        <button type="submit">Zaúčtovat</button>
+        <button type="button" class="secondary" data-action="close-modal">Zrušit</button>
+      </div>
+    </form>
+  `);
+}
+async function handleQuickPostManual(form) {
+  const lineId = form.dataset.lineId;
+  const accountId = new FormData(form).get("account_id");
+  await quickPostSuggested(lineId, accountId);
+  closeModal();
 }
 
 function bankLineFormModal() {
@@ -2008,11 +2164,14 @@ document.addEventListener("click", async (e) => {
   try {
     switch (action) {
       case "new-document": documentFormModal(); break;
+      case "scan-invoice": await scanInvoiceDocument(); break;
       case "new-posting": postingFormModal(); break;
       case "new-account": accountFormModal(); break;
       case "new-contact": contactFormModal(); break;
       case "new-project": projectFormModal(); break;
       case "new-bank-line": bankLineFormModal(); break;
+      case "quick-post-suggested": await quickPostSuggested(id, e.target.closest("[data-account]").dataset.account); break;
+      case "quick-post-manual": quickPostManualModal(id); break;
       case "import-bank": bankImportModal(); break;
       case "csv-parse": csvParseRows(); break;
       case "confirm-import": await confirmBankImport(); break;
@@ -2099,6 +2258,7 @@ document.addEventListener("submit", async (e) => {
       case "post-document": await handlePostDocument(e.target); break;
       case "create-project": await handleCreateProject(e.target); break;
       case "create-bank-line": await handleCreateBankLine(e.target); break;
+      case "quick-post-manual": await handleQuickPostManual(e.target); break;
       case "create-asset": await handleCreateAsset(e.target); break;
       case "create-inventory": await handleCreateInventory(e.target); break;
       case "toggle-vat": await handleToggleVat(e.target); break;

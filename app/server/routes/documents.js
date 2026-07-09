@@ -5,10 +5,12 @@ const multer = require("multer");
 const store = require("../db");
 const { generateDocumentNumber, nextPostingNumber, writeAuditLog, assertPeriodOpen } = require("../lib/core");
 const qrplatba = require("../lib/qrplatba");
+const invoiceScan = require("../lib/invoiceScan");
 const router = express.Router();
 
-const ALLOWED_MIME_TYPES = new Set(["application/pdf", "text/csv", "application/vnd.ms-excel"]);
+const ALLOWED_MIME_TYPES = new Set(["application/pdf", "text/csv", "application/vnd.ms-excel", "image/png", "image/jpeg"]);
 const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
+const scanUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_ATTACHMENT_BYTES } });
 
 function attachmentsDirFor(documentId) {
   const dir = path.join(store.getUserDataDir(), "attachments", String(documentId));
@@ -267,6 +269,23 @@ router.get("/attachments/:attachmentId/download", async (req, res) => {
     res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(attachment.file_name)}"`);
     fs.createReadStream(attachment.file_path).pipe(res);
   } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// POST /api/documents/scan — vytáhne text z nahrané faktury (PDF/PNG/JPG) a
+// zkusí rozpoznat pole dokladu (číslo, data, VS, částka, IČO/DIČ dodavatele).
+// Nic se neukládá — jen návrh pro předvyplnění formuláře "Nový doklad".
+router.post("/scan", (req, res) => {
+  scanUpload.single("file")(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    if (!req.file) return res.status(400).json({ error: "Chybí soubor." });
+    try {
+      const text = await invoiceScan.extractText(req.file.buffer, req.file.mimetype);
+      const fields = invoiceScan.extractFields(text);
+      res.json({ fields, ocr_supported: req.file.mimetype === "application/pdf", text_preview: text.slice(0, 300) });
+    } catch (err2) {
+      res.status(400).json({ error: "Nepodařilo se přečíst soubor: " + err2.message });
+    }
+  });
 });
 
 module.exports = router;
