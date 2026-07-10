@@ -12,22 +12,45 @@
 // pak platí pro všechny další requesty ze stejné Electron session (cookies
 // jsou perzistentní v userData). Token žije v `desktop-config.json`
 // (gitignored, NENÍ v repu) — viz README/handoff pro jak ho získat znovu.
+//
+// Část B (electron-updater, 2026-07-10): kromě obsahové aktualizace (Část A,
+// viz app.js checkForContentUpdate) potřebuje appka i cestu k aktualizaci
+// SAMOTNÉHO Electron shellu (main.js/preload.js) — to Část A nepokryje,
+// protože je to nativní kód, ne obsah stažený loadURL(). Řeší
+// electron-updater nad GitHub Releases (repo kubis3k/ucto je private,
+// proto GH_TOKEN z desktop-config.json — read-only token, viz níže).
+// Publikace nového release (upload .exe/.blockmap/latest.yml na GitHub) je
+// MANUÁLNÍ krok pro uživatele — tento token má jen Contents:Read, ne Write.
 // =====================================================================
-const { app, BrowserWindow, Menu, shell } = require("electron");
+const { app, BrowserWindow, Menu, shell, ipcMain } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const fs = require("fs");
 
 let mainWindow;
 
+// desktop-config.json obsahuje živé tokeny (Vercel bypass, GitHub PAT pro
+// electron-updater) — NESMÍ být součástí build.files/app.asar (kdokoliv by ho
+// z instalátoru vytáhl přes `asar extract`, GitHub token má Contents:Read na
+// celý PRIVÁTNÍ zdrojový repo, ne jen na releases). V zabalené appce se proto
+// čte z userData (mimo instalátor, mimo git) — po instalaci ho tam nutné jednou
+// ručně nakopírovat. V dev módu (`npm start`, appka NENÍ packaged) se čte přímo
+// z app/ jako dřív, pro pohodlí bez extra kroku.
+function configPath() {
+  if (app.isPackaged) return path.join(app.getPath("userData"), "desktop-config.json");
+  return path.join(__dirname, "desktop-config.json");
+}
+
 function loadDesktopConfig() {
-  const configPath = path.join(__dirname, "desktop-config.json");
-  if (!fs.existsSync(configPath)) {
+  const cfgPath = configPath();
+  if (!fs.existsSync(cfgPath)) {
     throw new Error(
-      `Chybí app/desktop-config.json (webBaseUrl + bypassToken). Soubor je gitignored, ` +
-      `musí existovat lokálně před buildem — viz .claude/state/flow-state.md pro postup.`
+      `Chybí desktop-config.json (webBaseUrl + bypassToken + githubToken) v: ${cfgPath}. ` +
+      `Soubor se NEbalí do instalátoru (obsahuje tokeny) — po instalaci ho tam nutné jednou ` +
+      `ručně nakopírovat. Viz .claude/state/flow-state.md pro postup.`
     );
   }
-  return JSON.parse(fs.readFileSync(configPath, "utf8"));
+  return JSON.parse(fs.readFileSync(cfgPath, "utf8"));
 }
 
 function bootUrl(config) {
@@ -109,7 +132,30 @@ async function createWindow() {
   mainWindow.webContents.on("console-message", (event, level, message, line, sourceId) => {
     console.log(`[renderer] ${message} (${sourceId}:${line})`);
   });
+
+  checkForAppUpdate(config);
 }
+
+let updateListenersRegistered = false; // createWindow() se může zavolat víckrát (app.on("activate")) — listenery jen jednou
+function checkForAppUpdate(config) {
+  if (!config || !config.githubToken) return; // bez tokenu nemá smysl zkoušet (private repo)
+  process.env.GH_TOKEN = config.githubToken;
+  autoUpdater.autoDownload = true;
+  if (updateListenersRegistered) {
+    autoUpdater.checkForUpdates().catch((err) => console.error("autoUpdater checkForUpdates:", err.message));
+    return;
+  }
+  updateListenersRegistered = true;
+  autoUpdater.on("update-downloaded", () => {
+    if (mainWindow) mainWindow.webContents.send("update-ready");
+  });
+  // Chyby (žádný release, výpadek sítě, ...) jen zalogovat — appka musí
+  // fungovat i bez dostupné aktualizace shellu, tenký klient nad webem běží dál.
+  autoUpdater.on("error", (err) => console.error("autoUpdater:", err.message));
+  autoUpdater.checkForUpdates().catch((err) => console.error("autoUpdater checkForUpdates:", err.message));
+}
+
+ipcMain.on("restart-and-install", () => autoUpdater.quitAndInstall());
 
 app.whenReady().then(createWindow);
 

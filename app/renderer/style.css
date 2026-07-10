@@ -432,8 +432,10 @@ label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 
 }
 /* Update banner sdílí stejný recept jako offline-banner (fixed pruh nahoře),
    jen jinou barvou (--green, ne --amber) — vizuálně odlišit "informativní/
-   akční" od "varovného" stavu. Nikdy nejsou zobrazené současně (kontrola
-   verze vyžaduje online, offline banner tedy update banner nepřekryje). */
+   akční" od "varovného" stavu. Offline/obsahová aktualizace/aktualizace
+   desktop shellu jsou na sobě nezávislé a mohou nastat současně — `top` se
+   nesetuje tady, ale dynamicky v JS (appendStackedBanner v app.js), aby se
+   víc bannerů zobrazilo pod sebou, ne přes sebe. */
 .update-banner {
   background: var(--green); color: #06231a;
 }

@@ -3157,6 +3157,7 @@ document.addEventListener("click", async (e) => {
       case "close-modal": closeModal(); break;
       case "toggle-theme": toggleTheme(); break;
       case "restart-to-update": await restartToUpdate(); break;
+      case "restart-desktop-update": window.desktopUpdater.restart(); break;
       case "toggle-balance-visibility": toggleBalanceVisibility(); break;
       case "auth-tab": AUTH_TAB = e.target.closest("[data-tab]").dataset.tab; renderAuthScreen(); break;
       case "logout": e.preventDefault(); await handleLogout(); break;
@@ -3328,6 +3329,16 @@ window.addEventListener("DOMContentLoaded", refreshThemeIcons);
 // Offline = Service Worker (sw.js) vrací poslední cachovanou GET odpověď,
 // zápisy ale selžou normální chybou (žádné tiché fronty) — tenhle banner
 // jen dá uživateli vědět PROČ může vidět neaktuální data / chybu při uložení.
+// Bannery (offline / obsahová aktualizace / aktualizace desktop shellu) jsou
+// na sobě nezávislé události a klidně mohou nastat současně — appendStackedBanner
+// je proto vždy přidá pod ty už existující, ne přes ně.
+function appendStackedBanner(banner) {
+  const existing = document.querySelectorAll(".offline-banner");
+  let top = 0;
+  existing.forEach((b) => { top += b.offsetHeight; });
+  banner.style.top = `${top}px`;
+  document.body.appendChild(banner);
+}
 function updateOfflineBanner() {
   let banner = document.getElementById("offlineBanner");
   if (!navigator.onLine) {
@@ -3336,7 +3347,7 @@ function updateOfflineBanner() {
       banner.id = "offlineBanner";
       banner.className = "offline-banner";
       banner.textContent = "Offline — zobrazena poslední stažená data, ukládání není možné.";
-      document.body.appendChild(banner);
+      appendStackedBanner(banner);
     }
   } else if (banner) {
     banner.remove();
@@ -3374,7 +3385,7 @@ function showUpdateBanner() {
   banner.id = "updateBanner";
   banner.className = "offline-banner update-banner";
   banner.innerHTML = `Je k dispozici nová verze appky. <button type="button" data-action="restart-to-update">Restart to update</button>`;
-  document.body.appendChild(banner);
+  appendStackedBanner(banner);
 }
 async function restartToUpdate() {
   try {
@@ -3390,6 +3401,22 @@ window.addEventListener("DOMContentLoaded", () => {
   setInterval(checkForContentUpdate, 5 * 60 * 1000);
   window.addEventListener("focus", checkForContentUpdate);
 });
+
+// Část B: aktualizace samotného Electron shellu (main.js/preload.js), ne jen
+// obsahu — `window.desktopUpdater` existuje jen v desktopové appce (viz
+// preload.js), v browseru je undefined. main.js stahuje update na pozadí
+// (electron-updater) a přes tento můstek appku upozorní, až je hotovo.
+function showDesktopUpdateBanner() {
+  if (document.getElementById("desktopUpdateBanner")) return;
+  const banner = document.createElement("div");
+  banner.id = "desktopUpdateBanner";
+  banner.className = "offline-banner update-banner";
+  banner.innerHTML = `Je stažená nová verze desktopové appky. <button type="button" data-action="restart-desktop-update">Restart to update</button>`;
+  appendStackedBanner(banner);
+}
+if (typeof window.desktopUpdater !== "undefined" && window.desktopUpdater) {
+  window.desktopUpdater.onReady(showDesktopUpdateBanner);
+}
 
 async function checkAuthAndStart() {
   const inviteMatch = location.hash.match(/^#accept-invite=(.+)$/);

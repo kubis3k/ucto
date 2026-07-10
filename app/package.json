@@ -1,6 +1,6 @@
 {
   "name": "globaal-elevate-ucetnictvi",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Nezávislý účetní systém pro Globaal Elevate Production s.r.o. — podvojné účetnictví, daňová evidence a DPH modul podle českého práva.",
   "main": "main.js",
   "author": "Globaal Elevate Production s.r.o.",
@@ -15,7 +15,12 @@
     "dist:dir": "electron-builder --win dir"
   },
   "dependencies": {
+    "electron-updater": "^6.3.9"
+  },
+  "devDependencies": {
     "bcryptjs": "^2.4.3",
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3",
     "express": "^4.22.2",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.2.0",
@@ -27,10 +32,6 @@
     "sql.js": "^1.14.1",
     "stripe": "^22.3.0"
   },
-  "devDependencies": {
-    "electron": "^31.7.7",
-    "electron-builder": "^24.13.3"
-  },
   "build": {
     "appId": "com.globaalelevate.ucetnictvi",
     "productName": "Globaal Elevate Ucetnictvi",
@@ -40,10 +41,14 @@
     "files": [
       "main.js",
       "preload.js",
-      "renderer/**/*",
-      "desktop-config.json",
-      "!node_modules/**/*"
+      "renderer/**/*"
     ],
+    "publish": {
+      "provider": "github",
+      "owner": "kubis3k",
+      "repo": "ucto",
+      "private": true
+    },
     "win": {
       "target": [
         {
