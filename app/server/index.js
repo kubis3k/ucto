@@ -57,6 +57,17 @@ async function buildApp(userDataDir) {
   app.use("/api/inbound", require("./routes/inbound-email"));
   app.use("/pay", require("./routes/stripe").payPage);
 
+  // GET /api/version — identifikátor NASAZENÍ (ne appky), aby si klient (web
+  // i desktop tenký klient) poznal, že běží proti staršímu obsahu než ten,
+  // co je právě na serveru, a nabídl "Restart to update" (viz app.js
+  // checkForUpdate()). VERCEL_GIT_COMMIT_SHA je stabilní pro celé nasazení
+  // (stejný napříč všemi warm instancemi), na rozdíl od Date.now() při
+  // cold-startu, který by se lišil instanci od instance a hlásil falešné
+  // poplachy. Bez env (lokální dev) vrací null → frontend banner nikdy neukáže.
+  app.get("/api/version", (req, res) => {
+    res.json({ version: process.env.VERCEL_GIT_COMMIT_SHA || null });
+  });
+
   app.use("/api", requireAuth);
   // Bezpečnostní zámek: routy níže dřív četly accounting_unit_id/unit
   // přímo od klienta (query/body) — klient si tak mohl vyžádat data jiné

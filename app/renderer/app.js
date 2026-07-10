@@ -3156,6 +3156,7 @@ document.addEventListener("click", async (e) => {
       case "new-template": templateFormModal(); break;
       case "close-modal": closeModal(); break;
       case "toggle-theme": toggleTheme(); break;
+      case "restart-to-update": await restartToUpdate(); break;
       case "toggle-balance-visibility": toggleBalanceVisibility(); break;
       case "auth-tab": AUTH_TAB = e.target.closest("[data-tab]").dataset.tab; renderAuthScreen(); break;
       case "logout": e.preventDefault(); await handleLogout(); break;
@@ -3344,6 +3345,51 @@ function updateOfflineBanner() {
 window.addEventListener("online", updateOfflineBanner);
 window.addEventListener("offline", updateOfflineBanner);
 window.addEventListener("DOMContentLoaded", updateOfflineBanner);
+
+// Updater (2026-07-10): appka (web i desktop tenký klient) běží nad OBSAHEM
+// nasazeným na serveru — "aktualizace appky" tedy znamená jen "natáhnout
+// čerstvý obsah", ne rebuild. GET /api/version vrací identifikátor NASAZENÍ
+// (VERCEL_GIT_COMMIT_SHA); zapamatujeme si ho při startu a pak periodicky/na
+// focus porovnáváme. Liší-li se, nabídneme banner "Restart to update", který
+// SKUTEČNĚ vynutí čerstvý obsah (odregistruje Service Worker + smaže jeho
+// cache, ne jen location.reload() — sw.js appku samotnou servíruje cache-first,
+// obyčejný reload by klidně ukázal starý obsah znovu).
+let INITIAL_VERSION = null;
+async function fetchVersion() {
+  try {
+    const res = await fetch(`${API}/version`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.version;
+  } catch { return null; }
+}
+async function checkForContentUpdate() {
+  if (INITIAL_VERSION === null) { INITIAL_VERSION = await fetchVersion(); return; }
+  const latest = await fetchVersion();
+  if (latest && INITIAL_VERSION && latest !== INITIAL_VERSION) showUpdateBanner();
+}
+function showUpdateBanner() {
+  if (document.getElementById("updateBanner")) return;
+  const banner = document.createElement("div");
+  banner.id = "updateBanner";
+  banner.className = "offline-banner update-banner";
+  banner.innerHTML = `Je k dispozici nová verze appky. <button type="button" data-action="restart-to-update">Restart to update</button>`;
+  document.body.appendChild(banner);
+}
+async function restartToUpdate() {
+  try {
+    const regs = await navigator.serviceWorker?.getRegistrations();
+    await Promise.all((regs || []).map((r) => r.unregister()));
+    const keys = await caches?.keys();
+    await Promise.all((keys || []).map((k) => caches.delete(k)));
+  } catch (e) { console.warn("restartToUpdate cleanup:", e); }
+  location.reload();
+}
+window.addEventListener("DOMContentLoaded", () => {
+  checkForContentUpdate();
+  setInterval(checkForContentUpdate, 5 * 60 * 1000);
+  window.addEventListener("focus", checkForContentUpdate);
+});
 
 async function checkAuthAndStart() {
   const inviteMatch = location.hash.match(/^#accept-invite=(.+)$/);
