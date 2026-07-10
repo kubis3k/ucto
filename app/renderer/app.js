@@ -961,9 +961,9 @@ function documentFormModal(existingDoc) {
     <h2>${isEdit ? `Upravit doklad ${esc(d.doc_number)}` : "Nový doklad"}</h2>
     ${isEdit ? "" : `
     <div class="scan-box">
-      <label>Naskenovat fakturu (PDF/PNG/JPG) — pole se předvyplní automaticky</label>
+      <label>Naskenovat fakturu (PDF/PNG/JPG/WEBP) — pole se předvyplní automaticky</label>
       <div style="display:flex;gap:8px;align-items:center">
-        <input type="file" id="scanFile" accept=".pdf,.png,.jpg,.jpeg" style="flex:1" />
+        <input type="file" id="scanFile" accept=".pdf,.png,.jpg,.jpeg,.webp" style="flex:1" />
         <button type="button" class="secondary" data-action="scan-invoice">Naskenovat</button>
       </div>
       <div id="scanStatus" class="text-dim" style="font-size:12px;margin-top:6px"></div>
@@ -1066,7 +1066,48 @@ async function editDocumentModal(id) {
   documentFormModal(doc);
 }
 
-// Odešle vybraný soubor na /documents/scan a předvyplní jím pole formuláře.
+// Lazy-load externího skriptu (Tesseract.js z CDN) — voláno JEN při prvním
+// OCR obrázku, ne při startu appky. Vrací Promise, reject při chybě sítě/CSP.
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${src}"]`);
+    if (existing) return resolve();
+    const s = document.createElement("script");
+    s.src = src;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("Nepodařilo se načíst skript: " + src));
+    document.head.appendChild(s);
+  });
+}
+
+// OCR obrázku (JPG/PNG/WEBP) přímo v browseru přes Tesseract.js (WASM, z
+// jsDelivr CDN) — fotka faktury NIKDY neopouští zařízení uživatele směrem
+// jinam než na náš server (na CDN jde jen dotaz na engine/wasm/traineddata,
+// nikdy samotný obrázek). Běží ve Web Workeru, takže UI nezamrzne.
+// onProgress(0..1) — pro aktualizaci stavového textu během rozpoznávání
+// (fotka může trvat sekundy až desítky sekund).
+async function ocrImageInBrowser(file, onProgress) {
+  if (!window.Tesseract) {
+    await loadScript("https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js");
+  }
+  const worker = await Tesseract.createWorker("ces+eng", 1, {
+    logger: (m) => { if (m.status === "recognizing text" && onProgress) onProgress(m.progress); },
+    corePath: "https://cdn.jsdelivr.net/npm/tesseract.js-core@5",
+    langPath: "https://tessdata.projectnaptha.com/4.0.0",
+    workerPath: "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js",
+  });
+  try {
+    const { data: { text } } = await worker.recognize(file);
+    return text;
+  } finally {
+    await worker.terminate();
+  }
+}
+
+// Rozpozná vybraný doklad a předvyplní jím pole formuláře.
+// PDF → nahraje se na server (pdf-parse čte textovou vrstvu, beze změny).
+// Obrázek (PNG/JPG/WEBP) → OCR proběhne přímo v browseru (Tesseract.js);
+// na server jde jen rozpoznaný TEXT (JSON), nikdy fotka samotná.
 // Podle rozpoznaného IČO dodavatele navíc nabídne rychlé založení kontaktu z ARES.
 async function scanInvoiceDocument() {
   const fileInput = document.getElementById("scanFile");
@@ -1076,9 +1117,30 @@ async function scanInvoiceDocument() {
 
   status.textContent = "Rozpoznávám doklad…";
   try {
-    const uploadFd = new FormData();
-    uploadFd.append("file", file);
-    const { fields, ocr_supported } = await apiUpload("/documents/scan", uploadFd);
+    let fields, ocr_supported;
+    if (file.type === "application/pdf") {
+      const uploadFd = new FormData();
+      uploadFd.append("file", file);
+      ({ fields, ocr_supported } = await apiUpload("/documents/scan", uploadFd));
+    } else if (file.type.startsWith("image/")) {
+      let text = "";
+      try {
+        text = await ocrImageInBrowser(file, (progress) => {
+          status.textContent = `Rozpoznávám obrázek… ${Math.round(progress * 100)}%`;
+        });
+      } catch (ocrErr) {
+        status.textContent = "OCR nedostupné (offline?) — doklad přiložte a pole doplňte ručně.";
+        return;
+      }
+      if (!text || !text.trim()) {
+        status.textContent = "Nerozpoznáno žádné pole — doplňte ručně.";
+        return;
+      }
+      ({ fields, ocr_supported } = await api("POST", "/documents/scan", { text }));
+    } else {
+      status.textContent = "Nepodporovaný typ souboru — vyberte PDF nebo obrázek (PNG/JPG/WEBP).";
+      return;
+    }
     const form = document.querySelector('[data-form="create-document"]');
 
     const map = {

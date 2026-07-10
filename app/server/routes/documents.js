@@ -514,7 +514,26 @@ router.post("/:id/payment-link", async (req, res) => {
 // POST /api/documents/scan — vytáhne text z nahrané faktury (PDF/PNG/JPG) a
 // zkusí rozpoznat pole dokladu (číslo, data, VS, částka, IČO/DIČ dodavatele).
 // Nic se neukládá — jen návrh pro předvyplnění formuláře "Nový doklad".
+//
+// Dvě větve vstupu:
+// - multipart/form-data (`file`) — PDF, čte se server-side přes pdf-parse
+//   (extractText + extractFields), beze změny oproti dřívějšímu chování.
+// - application/json ({ text }) — obrázek už byl rozpoznán OCR v browseru
+//   (Tesseract.js, viz app.js ocrImageInBrowser) — fotka samotná server
+//   NIKDY nevidí, jen výsledný text. Spustí se JEN extractFields(text).
+const MAX_SCAN_TEXT_LENGTH = 1_000_000; // 1 MB — reálný OCR text je < 50 kB
 router.post("/scan", (req, res) => {
+  if (req.is("application/json")) {
+    const text = req.body && req.body.text;
+    if (typeof text !== "string" || !text.trim()) {
+      return res.status(400).json({ error: "Chybí rozpoznaný text." });
+    }
+    if (text.length > MAX_SCAN_TEXT_LENGTH) {
+      return res.status(400).json({ error: "Text je příliš dlouhý." });
+    }
+    const fields = invoiceScan.extractFields(text);
+    return res.json({ fields, ocr_supported: true, text_preview: text.slice(0, 300) });
+  }
   scanUpload.single("file")(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: "Chybí soubor." });
