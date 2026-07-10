@@ -936,6 +936,7 @@ async function renderDocuments() {
             <td><span class="badge ${d.status}">${d.status}</span></td>
             <td>
               <button class="small secondary" data-action="doc-detail" data-id="${d.id}">Detail / QR</button>
+              ${d.status === "koncept" ? `<button class="small secondary" data-action="edit-doc" data-id="${d.id}">Upravit</button>` : ""}
               ${d.status === "koncept" ? `<button class="small" data-action="approve-doc" data-id="${d.id}">Schválit</button>` : ""}
               ${(d.status === "schvaleny" || d.status === "koncept") ? `<button class="small" data-action="post-doc" data-id="${d.id}">Zaúčtovat</button>` : ""}
               ${d.status !== "stornovany" ? `<button class="small danger" data-action="storno-doc" data-id="${d.id}">Storno</button>` : ""}
@@ -950,10 +951,15 @@ async function renderDocuments() {
   document.getElementById("fStatus").onchange = (e) => { docFilter.status = e.target.value; renderDocuments(); };
 }
 
-function documentFormModal() {
+// existingDoc: pokud je zadán, formulář se předvyplní jeho hodnotami a submit
+// jde na PUT /documents/:id místo POST /documents (editace, jen pro koncepty).
+function documentFormModal(existingDoc) {
   const period = currentOpenPeriod();
+  const d = existingDoc || {};
+  const isEdit = !!existingDoc;
   showModal(`
-    <h2>Nový doklad</h2>
+    <h2>${isEdit ? `Upravit doklad ${esc(d.doc_number)}` : "Nový doklad"}</h2>
+    ${isEdit ? "" : `
     <div class="scan-box">
       <label>Naskenovat fakturu (PDF/PNG/JPG) — pole se předvyplní automaticky</label>
       <div style="display:flex;gap:8px;align-items:center">
@@ -961,53 +967,58 @@ function documentFormModal() {
         <button type="button" class="secondary" data-action="scan-invoice">Naskenovat</button>
       </div>
       <div id="scanStatus" class="text-dim" style="font-size:12px;margin-top:6px"></div>
-    </div>
-    <form data-form="create-document">
+    </div>`}
+    <form data-form="${isEdit ? "update-document" : "create-document"}" ${isEdit ? `data-id="${d.id}"` : ""}>
       <div class="form-grid">
         <div><label>Typ dokladu</label>
-          <select name="doc_type">${Object.entries(DOC_TYPE_LABEL).map(([k,v]) => `<option value="${k}">${v}</option>`).join("")}</select>
+          <select name="doc_type" ${isEdit ? "disabled" : ""}>${Object.entries(DOC_TYPE_LABEL).map(([k,v]) => `<option value="${k}" ${d.doc_type===k?"selected":""}>${v}</option>`).join("")}</select>
         </div>
         <div><label>Kontakt</label>
-          <select name="contact_id"><option value="">—</option>${STATE._contacts.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select>
+          <select name="contact_id"><option value="">—</option>${STATE._contacts.map((c) => `<option value="${c.id}" ${String(d.contact_id)===String(c.id)?"selected":""}>${esc(c.name)}</option>`).join("")}</select>
         </div>
         <div><label>Projekt/zakázka</label>
-          <select name="project_id"><option value="">—</option>${(STATE._projects||[]).map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
+          <select name="project_id"><option value="">—</option>${(STATE._projects||[]).map((p) => `<option value="${p.id}" ${String(d.project_id)===String(p.id)?"selected":""}>${esc(p.name)}</option>`).join("")}</select>
         </div>
-        <div><label>Účetní období</label><select name="period_id">${periodOptions(period?.id)}</select></div>
-        <div><label>Datum vyhotovení</label><input type="date" name="issue_date" value="${todayISO()}" required /></div>
-        <div><label>DUZP (datum uskutečnění)</label><input type="date" name="taxable_supply_date" /></div>
-        <div><label>Splatnost</label><input type="date" name="due_date" /></div>
-        <div><label>Variabilní symbol</label><input type="text" name="variable_symbol" /></div>
-        <div><label>Celková částka</label><input type="number" step="0.01" name="total_amount" required /></div>
-        <div><label>Měna</label><select name="currency"><option value="CZK">CZK</option><option value="EUR">EUR</option><option value="USD">USD</option></select></div>
+        <div><label>Účetní období</label><select name="period_id" ${isEdit ? "disabled" : ""}>${periodOptions(d.period_id ?? period?.id)}</select></div>
+        <div><label>Datum vyhotovení</label><input type="date" name="issue_date" value="${d.issue_date || todayISO()}" required /></div>
+        <div><label>DUZP (datum uskutečnění)</label><input type="date" name="taxable_supply_date" value="${d.taxable_supply_date || ""}" /></div>
+        <div><label>Splatnost</label><input type="date" name="due_date" value="${d.due_date || ""}" /></div>
+        <div><label>Variabilní symbol</label><input type="text" name="variable_symbol" value="${esc(d.variable_symbol || "")}" /></div>
+        <div><label>Celková částka</label><input type="number" step="0.01" name="total_amount" value="${d.total_amount ?? ""}" required /></div>
+        <div><label>Měna</label><select name="currency"><option value="CZK" ${(!d.currency||d.currency==="CZK")?"selected":""}>CZK</option><option value="EUR" ${d.currency==="EUR"?"selected":""}>EUR</option><option value="USD" ${d.currency==="USD"?"selected":""}>USD</option></select></div>
       </div>
       <label>Popis / obsah účetního případu</label>
-      <textarea name="description" rows="2" required></textarea>
+      <textarea name="description" rows="2" required>${esc(d.description || "")}</textarea>
 
-      <label style="margin-top:16px"><input type="checkbox" name="is_vat_document" style="width:auto;display:inline-block;margin-right:6px" /> Daňový doklad (DPH pole)</label>
+      <label style="margin-top:16px"><input type="checkbox" name="is_vat_document" style="width:auto;display:inline-block;margin-right:6px" ${d.is_vat_document ? "checked" : ""} /> Daňový doklad (DPH pole)</label>
       <div class="form-grid">
-        <div><label>Základ daně</label><input type="number" step="0.01" name="vat_base_amount" /></div>
-        <div><label>Sazba DPH (%)</label><input type="number" step="0.01" name="vat_rate" value="21" /></div>
-        <div><label>Výše DPH</label><input type="number" step="0.01" name="vat_amount" /></div>
-        <div><label>DIČ protistrany</label><input type="text" name="counterparty_dic" /></div>
+        <div><label>Základ daně</label><input type="number" step="0.01" name="vat_base_amount" value="${d.vat_base_amount ?? ""}" /></div>
+        <div><label>Sazba DPH (%)</label><input type="number" step="0.01" name="vat_rate" value="${d.vat_rate ?? 21}" /></div>
+        <div><label>Výše DPH</label><input type="number" step="0.01" name="vat_amount" value="${d.vat_amount ?? ""}" /></div>
+        <div><label>DIČ protistrany</label><input type="text" name="counterparty_dic" value="${esc(d.counterparty_dic || "")}" /></div>
       </div>
 
       <div class="form-actions">
-        <button type="submit">Vytvořit koncept</button>
+        <button type="submit">${isEdit ? "Uložit změny" : "Vytvořit koncept"}</button>
         <button type="button" class="secondary" data-action="close-modal">Zrušit</button>
       </div>
     </form>
   `);
 }
 
-async function handleCreateDocument(form) {
+function collectDocumentFormBody(form) {
   const fd = new FormData(form);
   const body = Object.fromEntries(fd.entries());
-  body.accounting_unit_id = STATE.unit.id;
-  body.responsible_user_id = STATE.user.id;
   body.is_vat_document = fd.get("is_vat_document") === "on";
   body.total_amount = Number(body.total_amount);
   ["vat_base_amount", "vat_rate", "vat_amount"].forEach((k) => { if (body[k]) body[k] = Number(body[k]); });
+  return body;
+}
+
+async function handleCreateDocument(form) {
+  const body = collectDocumentFormBody(form);
+  body.accounting_unit_id = STATE.unit.id;
+  body.responsible_user_id = STATE.user.id;
   const doc = await api("POST", "/documents", body);
 
   // Naskenovaný soubor (pokud byl vybrán) se připojí jako příloha k právě vytvořenému dokladu.
@@ -1025,6 +1036,26 @@ async function handleCreateDocument(form) {
   toast("Doklad byl vytvořen jako koncept.");
   closeModal();
   renderDocuments();
+}
+
+async function handleUpdateDocument(form) {
+  const id = form.dataset.id;
+  const body = collectDocumentFormBody(form);
+  delete body.doc_type;
+  delete body.period_id;
+  const updated = await api("PUT", `/documents/${id}`, body);
+  if (updated._unmatched_bank_line) {
+    toast("Doklad byl upraven. Změna částky/měny zrušila dřívější spárování s bankovním pohybem — spárujte znovu v Bance a pokladně.", "error");
+  } else {
+    toast("Doklad byl upraven.");
+  }
+  closeModal();
+  renderDocuments();
+}
+
+async function editDocumentModal(id) {
+  const doc = await api("GET", `/documents/${id}`);
+  documentFormModal(doc);
 }
 
 // Odešle vybraný soubor na /documents/scan a předvyplní jím pole formuláře.
@@ -3127,6 +3158,7 @@ document.addEventListener("click", async (e) => {
       case "ares-search": await aresSearch(); break;
       case "ares-pick": await aresPickAndOpen(e.target.closest("[data-ico]").dataset.ico); break;
       case "doc-detail": await showDocumentDetail(id); break;
+      case "edit-doc": await editDocumentModal(id); break;
       case "load-qr": await loadDocumentQr(id); break;
       case "download-invoice-pdf": await downloadInvoicePdf(id, e.target.closest("[data-doc-number]").dataset.docNumber); break;
       case "open-send-invoice": openSendInvoiceForm(id); break;
@@ -3241,6 +3273,7 @@ document.addEventListener("submit", async (e) => {
   try {
     switch (formType) {
       case "create-document": await handleCreateDocument(e.target); break;
+      case "update-document": await handleUpdateDocument(e.target); break;
       case "create-posting": await handleCreatePosting(e.target); break;
       case "create-account": await handleCreateAccount(e.target); break;
       case "create-contact": await handleCreateContact(e.target); break;

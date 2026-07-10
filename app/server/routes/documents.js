@@ -122,6 +122,107 @@ router.post("/", async (req, res) => {
   }
 });
 
+// PUT /api/documents/:id — editace; povoleno JEN pro doklady ve stavu 'koncept'
+// (schválený/zaúčtovaný/stornovaný doklad se needituje — legitimní tok je přes
+// storno). doc_number/doc_type/accounting_unit_id/period_id/status/
+// responsible_user_id se needitují (identifikátory/workflow pole).
+router.put("/:id", async (req, res) => {
+  const {
+    contact_id, project_id, variable_symbol, issue_date, taxable_supply_date, due_date,
+    description, total_amount, currency, is_vat_document, vat_base_amount, vat_rate, vat_amount,
+    counterparty_dic, cash_payee_name, cash_payee_address, cash_payee_id_number, lines,
+  } = req.body;
+  try {
+    const existing = await store.get("SELECT * FROM document WHERE id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
+    if (!existing) return res.status(404).json({ error: "Doklad nenalezen" });
+    if (existing.status !== "koncept") return res.status(400).json({ error: "Upravit lze jen doklad ve stavu koncept." });
+
+    const doc = await store.transaction(async () => {
+      const newIssueDate = issue_date ?? existing.issue_date;
+      const newCurrency = currency ?? existing.currency ?? "CZK";
+
+      // FIX P2 (critic 2026-07-10, editace dokladu): bank.js /:id/match nemá
+      // status guard, takže i doklad ve stavu 'koncept' lze spárovat s bankovním
+      // pohybem před zaúčtováním. Pokud editace teď změní total_amount/currency,
+      // dřívější spárování by tiše ukazovalo na nesprávnou částku. Systém NEMÁ
+      // žádný "odpárovat" endpoint (dead-end pro uživatele), takže párování
+      // raději rovnou ZRUŠÍME a napíšeme to do audit logu — bezpečnější než
+      // tvrdě blokovat editaci nebo nechat nesedící matched_document_id.
+      const amountOrCurrencyChanging =
+        (total_amount !== undefined && total_amount !== existing.total_amount) ||
+        (currency !== undefined && currency !== existing.currency);
+      let unmatchedLineId = null;
+      if (amountOrCurrencyChanging) {
+        const matchedLine = await store.get("SELECT id FROM bank_statement_line WHERE matched_document_id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
+        if (matchedLine) {
+          await store.run("UPDATE bank_statement_line SET matched_document_id = NULL WHERE id = ?", [matchedLine.id]);
+          unmatchedLineId = matchedLine.id;
+        }
+      }
+
+      // Kurz vystavení (§ 24 odst. 6-7 ZoÚ) — přepočítat, jen když se mění na/uvnitř
+      // cizí měny (nová měna je cizí NEBO doklad už v cizí měně byl a mění se datum
+      // vyhotovení — kurz se váže na den vystavení). Stejná logika jako POST /
+      // (viz výše) — VĚDOMĚ zkopírováno 1:1, ne vytaženo do sdílené funkce (malý rozsah).
+      let fxRate = existing.fx_rate, fxRateUnit = existing.fx_rate_unit || 1;
+      if (newCurrency !== "CZK") {
+        const currencyChanged = currency !== undefined && currency !== existing.currency;
+        const dateChangedForFx = issue_date !== undefined && issue_date !== existing.issue_date && existing.currency !== "CZK";
+        if (currencyChanged || dateChangedForFx) {
+          const rate = await getRate(newCurrency, newIssueDate).catch(() => null);
+          if (rate) { fxRate = rate.rate; fxRateUnit = rate.unit; }
+          else { fxRate = null; fxRateUnit = 1; }
+        }
+      } else {
+        fxRate = null; fxRateUnit = 1;
+      }
+
+      await store.run(
+        `UPDATE document SET
+           contact_id=?, project_id=?, variable_symbol=?, issue_date=?, taxable_supply_date=?, due_date=?,
+           description=?, total_amount=?, currency=?, fx_rate=?, fx_rate_unit=?,
+           is_vat_document=?, vat_base_amount=?, vat_rate=?, vat_amount=?, counterparty_dic=?,
+           cash_payee_name=?, cash_payee_address=?, cash_payee_id_number=?
+         WHERE id=? AND accounting_unit_id=?`,
+        [
+          contact_id ?? existing.contact_id, project_id ?? existing.project_id, variable_symbol ?? existing.variable_symbol,
+          newIssueDate, taxable_supply_date ?? existing.taxable_supply_date, due_date ?? existing.due_date,
+          description ?? existing.description, total_amount ?? existing.total_amount, newCurrency, fxRate, fxRateUnit,
+          is_vat_document === undefined ? existing.is_vat_document : (is_vat_document ? 1 : 0),
+          vat_base_amount ?? existing.vat_base_amount, vat_rate ?? existing.vat_rate, vat_amount ?? existing.vat_amount,
+          counterparty_dic ?? existing.counterparty_dic,
+          cash_payee_name ?? existing.cash_payee_name, cash_payee_address ?? existing.cash_payee_address,
+          cash_payee_id_number ?? existing.cash_payee_id_number,
+          req.params.id, req.user.accountingUnitId,
+        ]
+      );
+
+      if (Array.isArray(lines)) {
+        await store.run("DELETE FROM document_line WHERE document_id = ?", [req.params.id]);
+        for (let i = 0; i < lines.length; i++) {
+          const l = lines[i];
+          await store.run(
+            `INSERT INTO document_line (document_id, line_no, description, quantity, unit_price, vat_rate, line_amount, suggested_account_id)
+             VALUES (?,?,?,?,?,?,?,?)`,
+            [req.params.id, i + 1, l.description, l.quantity || 1, l.unit_price, l.vat_rate || null, l.line_amount, l.suggested_account_id || null]
+          );
+        }
+      }
+
+      await writeAuditLog({
+        unitId: existing.accounting_unit_id, userId: req.user.id, action: "UPDATE", table: "document", entityId: req.params.id, before: existing,
+        after: unmatchedLineId ? { unmatched_bank_line_id: unmatchedLineId, reason: "total_amount/currency změněny po spárování s bankou" } : undefined,
+      });
+      const updated = await store.get("SELECT * FROM document WHERE id = ?", [req.params.id]);
+      const updatedLines = await store.all("SELECT * FROM document_line WHERE document_id = ? ORDER BY line_no", [req.params.id]);
+      return { ...updated, lines: updatedLines, _unmatched_bank_line: unmatchedLineId };
+    });
+    res.json(doc);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // POST /api/documents/:id/approve — schválení (odpovědná osoba za zaúčtování, § 11 ZoÚ)
 router.post("/:id/approve", async (req, res) => {
   const { approved_by } = req.body;
