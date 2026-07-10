@@ -1012,6 +1012,14 @@ function collectDocumentFormBody(form) {
   body.is_vat_document = fd.get("is_vat_document") === "on";
   body.total_amount = Number(body.total_amount);
   ["vat_base_amount", "vat_rate", "vat_amount"].forEach((k) => { if (body[k]) body[k] = Number(body[k]); });
+  // Nepovinná pole s cizím klíčem/datem/číslem — prázdný string z <select> "—"
+  // nebo prázdného <input type=date/number> se NESMÍ poslat jako "" (Postgres
+  // na integer/date sloupci to odmítne chybou "invalid input syntax", viz
+  // FP-2026-0004 bez vybraného projektu). Klíč se z body úplně odstraní, ať PUT
+  // na serveru spadne do `?? existing.hodnota` a zachová stávající NULL/hodnotu
+  // místo pokusu zapsat prázdný string. POST použije `|| null` a chová se stejně.
+  ["contact_id", "project_id", "taxable_supply_date", "due_date", "vat_base_amount", "vat_rate", "vat_amount"]
+    .forEach((k) => { if (body[k] === "") delete body[k]; });
   return body;
 }
 
