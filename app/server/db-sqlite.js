@@ -97,6 +97,14 @@ async function migrate() {
   // Kurz vystavení cizoměnového dokladu (§ 24 odst. 6-7 ZoÚ) — viz schema.sql pro vysvětlení.
   await ensureColumn("document", "fx_rate", "REAL");
   await ensureColumn("document", "fx_rate_unit", "INTEGER DEFAULT 1");
+  // Údaje pro elektronické podání DPH (DPHDP3/KH1) — kód finančního úřadu
+  // a strukturovaná adresa dle XSD (samostatně od volné adresy na faktuře).
+  await ensureColumn("accounting_unit", "ufo_code", "TEXT");
+  await ensureColumn("accounting_unit", "fs_street", "TEXT");
+  await ensureColumn("accounting_unit", "fs_house_number", "TEXT");
+  await ensureColumn("accounting_unit", "fs_orientation_number", "TEXT");
+  await ensureColumn("accounting_unit", "fs_city", "TEXT");
+  await ensureColumn("accounting_unit", "fs_zip", "TEXT");
 }
 
 function persist() {

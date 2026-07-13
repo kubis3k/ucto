@@ -75,6 +75,7 @@ router.patch("/units/:id", async (req, res) => {
   const {
     is_vat_payer, vat_payer_since, accounting_mode, name, dic, unit_category, iban, bank_account,
     address, email, phone, logo_data_url, stamp_data_url, signature_data_url,
+    ufo_code, fs_street, fs_house_number, fs_orientation_number, fs_city, fs_zip,
   } = req.body;
   try {
     if (Number(req.params.id) !== req.user.accountingUnitId) return res.status(403).json({ error: "Nemáte oprávnění upravovat jinou firmu." });
@@ -96,12 +97,20 @@ router.patch("/units/:id", async (req, res) => {
         phone = COALESCE(?, phone),
         logo_data_url = COALESCE(?, logo_data_url),
         stamp_data_url = COALESCE(?, stamp_data_url),
-        signature_data_url = COALESCE(?, signature_data_url)
+        signature_data_url = COALESCE(?, signature_data_url),
+        ufo_code = COALESCE(?, ufo_code),
+        fs_street = COALESCE(?, fs_street),
+        fs_house_number = COALESCE(?, fs_house_number),
+        fs_orientation_number = COALESCE(?, fs_orientation_number),
+        fs_city = COALESCE(?, fs_city),
+        fs_zip = COALESCE(?, fs_zip)
        WHERE id = ?`,
       [is_vat_payer === undefined ? null : (is_vat_payer ? 1 : 0), vat_payer_since || null,
        accounting_mode || null, name || null, dic || null, unit_category || null,
        iban || null, bank_account || null, address || null, email || null, phone || null,
-       logo_data_url || null, stamp_data_url || null, signature_data_url || null, req.params.id]
+       logo_data_url || null, stamp_data_url || null, signature_data_url || null,
+       ufo_code || null, fs_street || null, fs_house_number || null, fs_orientation_number || null,
+       fs_city || null, fs_zip || null, req.params.id]
     );
     store.persist();
     await writeAuditLog({ unitId: req.params.id, action: "UPDATE", table: "accounting_unit", entityId: req.params.id, before, after: req.body });

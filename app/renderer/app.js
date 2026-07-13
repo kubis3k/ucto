@@ -2794,8 +2794,51 @@ async function renderVat() {
           : `<tr><td colspan="7" class="empty-state">Zatím žádné doklady v evidenci DPH.</td></tr>`}
         </tbody>
       </table></div>
+    </div>
+
+    <div class="panel">
+      <h2>Elektronické podání</h2>
+      <p class="text-dim">Vygeneruje XML podklad pro nahrání na <a href="https://adisspr.mfcr.cz/dpr/adis/idpr_pub/" target="_blank" rel="noopener">MOJE daně / EPO</a>. Pokrývá jen běžná tuzemská plnění se standardní (21&nbsp;%) a první sníženou (12&nbsp;%) sazbou — plnění do/z zahraničí, přenesenou daňovou povinnost, opravy a dovoz doplňte/ověřte ručně. <strong>Před podáním vždy zkontrolujte s účetní/daňovým poradcem.</strong></p>
+      <form data-form="edane-xml" class="form-grid" style="align-items:end">
+        <div><label>Rok</label><input type="number" name="rok" value="${new Date().getFullYear()}" required /></div>
+        <div><label>Období</label>
+          <select name="period_type">
+            <option value="mesic">Měsíc</option>
+            <option value="ctvrt">Čtvrtletí</option>
+          </select>
+        </div>
+        <div><label>Číslo období</label><input type="number" name="period_value" min="1" max="12" value="${new Date().getMonth() + 1}" required /></div>
+        <div><button type="submit" name="which" value="priznani">Stáhnout DPH přiznání (XML)</button></div>
+        <div><button type="submit" name="which" value="kh" class="secondary">Stáhnout kontrolní hlášení (XML)</button></div>
+      </form>
+      ${(!STATE.unit.dic || !STATE.unit.ufo_code) ? `<p class="text-dim" style="color:var(--danger)">Chybí DIČ nebo kód finančního úřadu — doplňte v <a href="#settings">Nastavení</a>.</p>` : ""}
     </div>` : `<div class="panel"><div class="empty-state">Modul DPH se aktivuje po nastavení plátcovství výše.</div></div>`}
   `;
+}
+
+// Stáhne XML podklad pro DPH přiznání / kontrolní hlášení přes autentizovaný
+// fetch (plain <a href> by neposlal Authorization header), stejný vzor jako
+// downloadInvoicePdf.
+async function downloadEdaneXml(form, which) {
+  const fd = new FormData(form);
+  const rok = fd.get("rok");
+  const periodType = fd.get("period_type");
+  const periodValue = fd.get("period_value");
+  const path = which === "kh" ? "/vat/kontrolni-hlaseni/xml" : "/vat/priznani/xml";
+  const qs = new URLSearchParams({ rok, [periodType]: periodValue });
+  try {
+    const headers = {};
+    const token = authToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${API}${path}?${qs}`, { headers });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || res.statusText); }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `${which === "kh" ? "DPHKH1" : "DPHDP3"}_${rok}_${periodType === "mesic" ? "M" + periodValue : "Q" + periodValue}.xml`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (err) { toast(err.message, "error"); }
 }
 
 async function handleToggleVat(form) {
@@ -2967,6 +3010,13 @@ async function renderSettings() {
         <div><label>Logo${STATE.unit.logo_data_url ? " (nahrané — vyberte nový soubor pro nahrazení)" : ""}</label><input type="file" name="logo_file" accept="image/png,image/jpeg,image/svg+xml" /></div>
         <div><label>Razítko${STATE.unit.stamp_data_url ? " (nahrané)" : ""}</label><input type="file" name="stamp_file" accept="image/png,image/jpeg" /></div>
         <div><label>Podpis${STATE.unit.signature_data_url ? " (nahraný)" : ""}</label><input type="file" name="signature_file" accept="image/png,image/jpeg" /></div>
+        <div style="grid-column:1/-1"><p class="text-dim" style="margin:6px 0 0">Údaje pro elektronické podání DPH (kap. Výstupy → DPH)</p></div>
+        <div><label>Kód finančního úřadu</label><input type="text" name="ufo_code" value="${esc(STATE.unit.ufo_code || "")}" placeholder="np. 401" /></div>
+        <div><label>Ulice (sídlo)</label><input type="text" name="fs_street" value="${esc(STATE.unit.fs_street || "")}" /></div>
+        <div><label>Číslo popisné</label><input type="text" name="fs_house_number" value="${esc(STATE.unit.fs_house_number || "")}" /></div>
+        <div><label>Číslo orientační</label><input type="text" name="fs_orientation_number" value="${esc(STATE.unit.fs_orientation_number || "")}" /></div>
+        <div><label>Obec</label><input type="text" name="fs_city" value="${esc(STATE.unit.fs_city || "")}" /></div>
+        <div><label>PSČ</label><input type="text" name="fs_zip" value="${esc(STATE.unit.fs_zip || "")}" /></div>
         <div style="grid-column:1/-1"><button type="submit">Uložit</button></div>
       </form>
     </div>
@@ -3374,6 +3424,7 @@ document.addEventListener("submit", async (e) => {
       case "send-offer-email": await handleSendOfferEmail(e.target); break;
       case "create-recurring": await handleCreateRecurring(e.target); break;
       case "save-priloha": await handleSavePriloha(e.target); break;
+      case "edane-xml": await downloadEdaneXml(e.target, e.submitter?.value); break;
     }
   } catch (err) {
     toast(err.message, "error");

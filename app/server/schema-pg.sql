@@ -183,6 +183,15 @@ CREATE TABLE IF NOT EXISTS document (
 ALTER TABLE document ADD COLUMN IF NOT EXISTS fx_rate DOUBLE PRECISION;
 ALTER TABLE document ADD COLUMN IF NOT EXISTS fx_rate_unit INTEGER DEFAULT 1;
 
+-- Údaje pro elektronické podání DPH (DPHDP3/KH1) — kód finančního úřadu
+-- a strukturovaná adresa dle XSD (samostatně od volné adresy na faktuře).
+ALTER TABLE accounting_unit ADD COLUMN IF NOT EXISTS ufo_code TEXT;
+ALTER TABLE accounting_unit ADD COLUMN IF NOT EXISTS fs_street TEXT;
+ALTER TABLE accounting_unit ADD COLUMN IF NOT EXISTS fs_house_number TEXT;
+ALTER TABLE accounting_unit ADD COLUMN IF NOT EXISTS fs_orientation_number TEXT;
+ALTER TABLE accounting_unit ADD COLUMN IF NOT EXISTS fs_city TEXT;
+ALTER TABLE accounting_unit ADD COLUMN IF NOT EXISTS fs_zip TEXT;
+
 CREATE TABLE IF NOT EXISTS document_line (
     id                  SERIAL PRIMARY KEY,
     document_id         INTEGER NOT NULL REFERENCES document(id),

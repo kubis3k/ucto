@@ -1,8 +1,37 @@
 const express = require("express");
 const store = require("../db");
+const { generateDphDp3Xml, generateKontrolniHlaseniXml } = require("../lib/eDaneXml");
 const router = express.Router();
 
 const KH_THRESHOLD = 10000; // § 100 ZDPH — kontrolní hlášení vyžaduje jednotlivou evidenci nad 10 000 Kč vč. daně
+
+// rok+mesic nebo rok+ctvrt -> přesné datumové rozpětí období (první/poslední den),
+// aby zdobd_od/zdobd_do v XML vždy odpovídalo zadanému mesic/ctvrt (žádné dohadování
+// typu období z libovolného rozsahu datumů). Počítáno čistě z kalendářních čísel
+// (bez Date/toISOString) — ty procházejí lokální→UTC převodem a na stroji s jiným
+// časovým pásmem než ČR by posunuly první/poslední den o den mimo (reálně nalezeno
+// při testu: 1.7. se převedlo na 30.6.).
+const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+function isLeap(y) { return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; }
+function lastDayOfMonth(y, m) { return m === 2 && isLeap(y) ? 29 : DAYS_IN_MONTH[m - 1]; }
+function pad2(n) { return String(n).padStart(2, "0"); }
+function ymd(y, m, d) { return `${y}-${pad2(m)}-${pad2(d)}`; }
+
+function periodRange({ rok, mesic, ctvrt }) {
+  const y = Number(rok);
+  if (mesic) {
+    const m = Number(mesic);
+    return { zdobdOd: ymd(y, m, 1), zdobdDo: ymd(y, m, lastDayOfMonth(y, m)), mesic: m, ctvrt: null };
+  }
+  const q = Number(ctvrt);
+  const startMonth = (q - 1) * 3 + 1;
+  const endMonth = q * 3;
+  return { zdobdOd: ymd(y, startMonth, 1), zdobdDo: ymd(y, endMonth, lastDayOfMonth(y, endMonth)), mesic: null, ctvrt: q };
+}
+function today() {
+  const d = new Date();
+  return ymd(d.getFullYear(), d.getMonth() + 1, d.getDate());
+}
 
 // GET /api/vat/ledger?unit=1&direction=uskutecnene
 router.get("/ledger", async (req, res) => {
@@ -77,6 +106,72 @@ router.get("/kontrolni-hlaseni", async (req, res) => {
       [unit, start, end]
     ));
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/vat/priznani/xml?rok=2026&mesic=7  (nebo &ctvrt=3 místo mesic)
+// XML podklad pro Přiznání k DPH (DPHDP3) — ke stažení a nahrání na MOJE daně/EPO.
+// Rozsah: jen tuzemská plnění se standardní (21 %) a první sníženou (12 %) sazbou,
+// viz komentář v lib/eDaneXml.js. Před podáním nutná kontrola s účetní/daňovým poradcem.
+router.get("/priznani/xml", async (req, res) => {
+  try {
+    const unit = await store.get("SELECT * FROM accounting_unit WHERE id = ?", [req.user.accountingUnitId]);
+    if (!unit.dic || !unit.ufo_code) {
+      return res.status(400).json({ error: "Pro elektronické podání vyplňte v Nastavení DIČ a kód finančního úřadu." });
+    }
+    const { zdobdOd, zdobdDo, mesic, ctvrt } = periodRange(req.query);
+
+    const rows = await store.all(
+      `SELECT v.direction, v.vat_rate, SUM(v.vat_base) AS base, SUM(v.vat_amount) AS tax
+       FROM vat_ledger_entry v JOIN document d ON d.id = v.document_id
+       WHERE d.accounting_unit_id = ? AND v.duzp BETWEEN ? AND ?
+       GROUP BY v.direction, v.vat_rate`,
+      [req.user.accountingUnitId, zdobdOd, zdobdDo]
+    );
+    const zero = { base: 0, tax: 0 };
+    const agg = { out23: { ...zero }, out5: { ...zero }, in23: { ...zero }, in5: { ...zero }, unmapped: [] };
+    for (const r of rows) {
+      const bucket = { 21: "23", 12: "5" }[Math.round(Number(r.vat_rate))];
+      const key = (r.direction === "uskutecnene" ? "out" : "in") + bucket;
+      if (bucket && agg[key]) { agg[key].base += Number(r.base); agg[key].tax += Number(r.tax); }
+      else agg.unmapped.push(r);
+    }
+
+    const xml = generateDphDp3Xml({ unit, rok: req.query.rok, mesic, ctvrt, zdobdOd, zdobdDo, agg, dPoddp: today() });
+    if (agg.unmapped.length) res.setHeader("X-Nepokryta-Sazba", "true"); // upozornění pro frontend, viz app.js
+    res.setHeader("Content-Type", "application/xml; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="DPHDP3_${req.query.rok}_${mesic || "Q" + ctvrt}.xml"`);
+    res.send(xml);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// GET /api/vat/kontrolni-hlaseni/xml?rok=2026&mesic=7 — XML podklad pro Kontrolní
+// hlášení (DPHKH1), jen doklady nad limit KH (§ 100 ZDPH). Stejné omezení rozsahu
+// jako u DPHDP3 výše.
+router.get("/kontrolni-hlaseni/xml", async (req, res) => {
+  try {
+    const unit = await store.get("SELECT * FROM accounting_unit WHERE id = ?", [req.user.accountingUnitId]);
+    if (!unit.dic || !unit.ufo_code) {
+      return res.status(400).json({ error: "Pro elektronické podání vyplňte v Nastavení DIČ a kód finančního úřadu." });
+    }
+    const { zdobdOd, zdobdDo, mesic, ctvrt } = periodRange(req.query);
+
+    const entries = await store.all(
+      `SELECT v.*, d.doc_number
+       FROM vat_ledger_entry v JOIN document d ON d.id = v.document_id
+       WHERE d.accounting_unit_id = ? AND v.requires_individual_kh = 1 AND v.duzp BETWEEN ? AND ?
+       ORDER BY v.duzp`,
+      [req.user.accountingUnitId, zdobdOd, zdobdDo]
+    );
+    const missingDic = entries.filter((e) => !e.counterparty_dic);
+    if (missingDic.length) {
+      return res.status(400).json({ error: `${missingDic.length} doklad(ů) nad limit KH chybí DIČ protistrany — doplňte v evidenci DPH před generováním XML.` });
+    }
+
+    const xml = generateKontrolniHlaseniXml({ unit, rok: req.query.rok, mesic, ctvrt, zdobdOd, zdobdDo, entries, dPoddp: today() });
+    res.setHeader("Content-Type", "application/xml; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="DPHKH1_${req.query.rok}_${mesic || "Q" + ctvrt}.xml"`);
+    res.send(xml);
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 module.exports = router;
