@@ -717,7 +717,7 @@ async function renderDashboard() {
           ["Doklad", (r) => `${DOC_TYPE_LABEL[r.doc_type]} ${esc(r.doc_number)}`],
           ["Protistrana", (r) => esc(r.protistrana || "—")],
           ["Splatnost", (r) => fmtDate(r.due_date)],
-          ["Částka", (r) => fmtMoney(r.total_amount), "num"],
+          ["Zbývá uhradit", (r) => r.uhrazeno > 0 ? `${fmtMoney(r.zbyva)} <span class="text-dim">(uhrazeno ${fmtMoney(r.uhrazeno)} z ${fmtMoney(r.expected_czk)})</span>` : fmtMoney(r.zbyva), "num"],
           ["Po splatnosti", (r) => r.dni_po_splatnosti > 0 ? `${r.dni_po_splatnosti} dní` : "ne", "num"],
         ])}
       </div>
@@ -2260,7 +2260,12 @@ async function renderBank() {
           result?.fx_posting ? `kurzový rozdíl (zápis č. ${result.fx_posting.posting_number})` : null,
           result?.margin_posting ? `kurzová marže banky (zápis č. ${result.margin_posting.posting_number})` : null,
         ].filter(Boolean);
-        toast(extra.length ? `Pohyb spárován. Vznikl vyrovnávací zápis: ${extra.join(", ")}.` : "Pohyb byl spárován s dokladem.");
+        const adjustments = extra.length ? ` Vznikl vyrovnávací zápis: ${extra.join(", ")}.` : "";
+        if (result?.fully_paid) {
+          toast(`Pohyb spárován — doklad je nyní uhrazen (${fmtMoney(result.new_total)} / ${fmtMoney(result.expected)}).${adjustments}`);
+        } else {
+          toast(`Pohyb spárován jako částečná úhrada — uhrazeno ${fmtMoney(result.new_total)} / ${fmtMoney(result.expected)}, zbývá ${fmtMoney(result.expected - result.new_total)}. Zbytek spárujte dalším bankovním pohybem.`);
+        }
       } catch (err) {
         toast(err.message, "error");
       }

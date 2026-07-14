@@ -203,23 +203,46 @@ async function obratDph(unitId) {
 // Kniha pohledávek a závazků — nesplacené faktury. Dny po splatnosti se
 // počítají v JS, ne v SQL (julianday() je jen SQLite, Postgres ho nemá —
 // takhle to funguje shodně na obou dialektech beze změny SQL).
+//
+// FIX (2026-07-14, rozložené platby): doklad se dřív z reportu vyřadil, jakmile
+// měl JAKÝKOLI spárovaný bankovní řádek — ale bank.js /:id/match teď umožňuje
+// spárovat víc řádků na jeden doklad (smlouva rozdělená na víc plateb), takže
+// jeden spárovaný řádek už neznamená "uhrazeno". Místo toho se sčítá součet
+// VŠECH spárovaných řádků na doklad a porovnává s očekávanou částkou (CZK
+// ekvivalent při cizí měně, přepočteno kurzem k vystavení jako přiblížení —
+// stejná logika jako czkIssue v bank.js).
 async function knihaPohledavkyZavazky(unitId) {
   const rows = await store.all(
     `SELECT d.id AS document_id, d.doc_type, d.doc_number, c.name AS protistrana,
-            d.issue_date, d.due_date, d.total_amount, d.status, d.currency, d.fx_rate, d.fx_rate_unit
+            d.issue_date, d.due_date, d.total_amount, d.status, d.currency, d.fx_rate, d.fx_rate_unit,
+            COALESCE((SELECT SUM(ABS(amount)) FROM bank_statement_line WHERE matched_document_id = d.id), 0) AS uhrazeno
      FROM document d
      LEFT JOIN contact c ON c.id = d.contact_id
      WHERE d.accounting_unit_id = ? AND d.doc_type IN ('faktura_vydana','faktura_prijata')
        AND d.status <> 'stornovany'
-       AND d.id NOT IN (SELECT matched_document_id FROM bank_statement_line WHERE matched_document_id IS NOT NULL)
      ORDER BY d.due_date`,
     [unitId]
   );
   const today = new Date(new Date().toDateString());
-  return rows.map((r) => ({
-    ...r,
-    dni_po_splatnosti: r.due_date ? Math.floor((today - new Date(r.due_date)) / 86400000) : null,
-  }));
+  return rows
+    .map((r) => {
+      const isForeign = !!(r.currency && r.currency !== "CZK");
+      const expected = isForeign && r.fx_rate
+        ? Math.round(r.total_amount * (r.fx_rate / (r.fx_rate_unit || 1)) * 100) / 100
+        : r.total_amount;
+      const zbyva = Math.round((expected - r.uhrazeno) * 100) / 100;
+      // Nesplacená částka v PŮVODNÍ měně dokladu (ne v CZK) — potřebné pro
+      // přecenění k rozvahovému dni (fxRevaluation.js), které smí přecenit jen
+      // to, co ještě skutečně dlužíme, ne celou původní částku dokladu, pokud
+      // je doklad rozložený na víc plateb a část už je uhrazená.
+      const outstandingAmount = isForeign && expected > 0 ? Math.round((r.total_amount * zbyva / expected) * 100) / 100 : r.total_amount;
+      return { ...r, expected_czk: expected, zbyva, outstanding_amount: outstandingAmount };
+    })
+    .filter((r) => r.zbyva > 0.02)
+    .map((r) => ({
+      ...r,
+      dni_po_splatnosti: r.due_date ? Math.floor((today - new Date(r.due_date)) / 86400000) : null,
+    }));
 }
 
 // Automaticky dopočítaná data pro přílohu k účetní závěrce (§ 18 ZoÚ) —

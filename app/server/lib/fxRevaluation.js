@@ -43,8 +43,12 @@ async function preceniOtevrenePohledavkyZavazky(unitId, rozvahovyDen, createdBy)
       continue;
     }
 
+    // FIX (2026-07-14, rozložené platby): přecenit jen nesplacenou částku
+    // (r.outstanding_amount), ne celou původní r.total_amount — u dokladu
+    // rozloženého na víc plateb by jinak přecenění nadhodnotilo rozdíl o už
+    // uhrazenou část.
     const diff = Math.round(
-      r.total_amount * (rateRozvahovyDen.rate / (rateRozvahovyDen.unit || 1) - r.fx_rate / (r.fx_rate_unit || 1)) * 100
+      r.outstanding_amount * (rateRozvahovyDen.rate / (rateRozvahovyDen.unit || 1) - r.fx_rate / (r.fx_rate_unit || 1)) * 100
     ) / 100;
     if (Math.abs(diff) < 0.01) {
       results.push({ document_id: r.document_id, doc_number: r.doc_number, skipped: true, reason: "Kurzový rozdíl je nulový." });

@@ -2,7 +2,7 @@ const express = require("express");
 const crypto = require("crypto");
 const store = require("../db");
 const { nextPostingNumber, writeAuditLog } = require("../lib/core");
-const { createBankStatementLine, amountsMatch } = require("../lib/bankMovements");
+const { createBankStatementLine } = require("../lib/bankMovements");
 const { getRate } = require("../lib/cnbExchangeRate");
 const router = express.Router();
 
@@ -151,21 +151,26 @@ async function postFxAdjustment({ unitId, doc, line, diff, gainAccountNumber, lo
 }
 
 // POST /api/bank/:id/match — spárování řádku výpisu s dokladem (faktura/pokladní doklad).
-// FIX (critic 2026-07-09): scope na accounting_unit_id (IDOR) + odmítnutí
-// neshody částky (viz lib/bankMovements.amountsMatch — částečná úhrada by
-// spárovala celou fakturu a ta by zmizela z pohledávky/závazky reportu).
+// FIX (critic 2026-07-09): scope na accounting_unit_id (IDOR).
 // FIX (úkol 4, kurzové rozdíly): u cizoměnového dokladu se částka pohybu (VŽDY
 // v CZK) porovnává s CZK ekvivalentem dokladu K DATU ÚHRADY (kurz ČNB toho dne),
 // ne s raw total_amount v cizí měně. Pokud se kurz vystavení a úhrady liší,
 // vygeneruje se navíc vyrovnávací zápis kurzového rozdílu (563/663 proti 311/321).
 // FIX (2026-07-13): banka reálně směňuje za VLASTNÍ komerční kurz, ne za kurz
 // ČNB — přesná shoda na 0.01 Kč je tedy pro cizoměnové doklady nereálná (viz
-// příklad RB vs. ČNB, rozdíl ~3,4 %). Místo tvrdého odmítnutí se teď povolí
-// tolerance FX_BANK_MARGIN_TOLERANCE a rozdíl (skutečná částka banky vs. ČNB
-// kurz k datu úhrady) se zaúčtuje zvlášť jako "kurzová marže banky" (568/668),
-// odděleně od kurzového rozdílu vystavení→úhrada (563/663) — jde o dvě různé
-// věci: kurzový rozdíl je posun kurzu ČNB v čase, marže banky je cena za
-// směnu u konkrétní banky, není to kurzový rozdíl ve smyslu zákona.
+// příklad RB vs. ČNB, rozdíl ~3,4 %). Tolerance FX_BANK_MARGIN_TOLERANCE a
+// rozdíl (skutečná částka banky vs. ČNB kurz k datu úhrady) se zaúčtuje zvlášť
+// jako "kurzová marže banky" (568/668), odděleně od kurzového rozdílu
+// vystavení→úhrada (563/663) — kurzový rozdíl je posun kurzu ČNB v čase, marže
+// banky je cena za směnu u konkrétní banky, není to kurzový rozdíl ve smyslu zákona.
+// FIX (2026-07-14, rozložené platby): jeden doklad (smlouva/faktura) může být
+// uhrazen VÍCE bankovními pohyby (např. smlouva na 5900 Kč zaplacená jako
+// 5000+900 Kč). Místo požadavku na přesnou shodu s CELOU částkou dokladu se
+// teď sčítá součet VŠECH už spárovaných řádků + tento řádek a porovnává se
+// s očekávanou částkou — odmítne se jen PŘEPLATEK nad toleranci, podplatek
+// (další platba doplní zbytek) je vždy v pořádku. Kurzové vyrovnání (FX
+// rozdíl/marže) se počítá jen na řádku, který doklad DOPLATÍ do celé částky,
+// ne na každé dílčí platbě zvlášť.
 router.post("/:id/match", async (req, res) => {
   const { document_id, created_by } = req.body;
   const unitId = req.user.accountingUnitId;
@@ -178,6 +183,7 @@ router.post("/:id/match", async (req, res) => {
     const isForeign = !!(doc.currency && doc.currency !== "CZK");
     let czkPay = doc.total_amount;
     let czkIssue = doc.total_amount;
+    let expected = doc.total_amount;
 
     if (isForeign) {
       const ratePay = await getRate(doc.currency, line.statement_date).catch(() => null);
@@ -186,30 +192,43 @@ router.post("/:id/match", async (req, res) => {
       }
       czkPay = Math.round(doc.total_amount * (ratePay.rate / (ratePay.unit || 1)) * 100) / 100;
       if (doc.fx_rate) czkIssue = Math.round(doc.total_amount * (doc.fx_rate / (doc.fx_rate_unit || 1)) * 100) / 100;
-      const diffRatio = czkPay > 0 ? Math.abs(Math.abs(line.amount) - czkPay) / czkPay : 1;
-      if (diffRatio > FX_BANK_MARGIN_TOLERANCE) {
-        return res.status(400).json({
-          error: `Částka pohybu (${Math.abs(line.amount)} Kč) neodpovídá CZK ekvivalentu dokladu k datu úhrady (${czkPay} Kč, kurz ${doc.currency}) ani s tolerancí ${FX_BANK_MARGIN_TOLERANCE * 100}% na kurzovou marži banky — nelze spárovat celou fakturu s částečnou úhradou. Pro částečné úhrady použijte zaúčtování bez dokladu (quick-post).`,
-        });
-      }
-    } else if (!amountsMatch(line.amount, doc.total_amount)) {
+      expected = czkPay;
+    }
+
+    const already = await store.get(
+      `SELECT COALESCE(SUM(ABS(amount)),0) AS sum FROM bank_statement_line
+       WHERE matched_document_id = ? AND accounting_unit_id = ? AND id <> ?`,
+      [document_id, unitId, req.params.id]
+    );
+    const alreadyMatched = Math.round(Number(already.sum) * 100) / 100;
+    const newTotal = Math.round((alreadyMatched + Math.abs(line.amount)) * 100) / 100;
+
+    // Tolerance přeplatku: u cizoměnových dokladů širší (marže banky), u CZK
+    // jen zaokrouhlení na haléře. Podplatek nikdy neodmítáme — to je přesně
+    // rozložená platba, další řádek doplní zbytek.
+    const overshootTolerance = isForeign ? expected * FX_BANK_MARGIN_TOLERANCE : 0.02;
+    if (newTotal - expected > overshootTolerance) {
+      const zbyva = Math.max(0, Math.round((expected - alreadyMatched) * 100) / 100);
       return res.status(400).json({
-        error: `Částka pohybu (${Math.abs(line.amount)}) neodpovídá částce dokladu (${doc.total_amount}) — nelze spárovat celou fakturu s částečnou úhradou. Pro částečné úhrady použijte zaúčtování bez dokladu (quick-post).`,
+        error: `Částka pohybu (${Math.abs(line.amount)} Kč) by spolu s už spárovanými platbami (${alreadyMatched} Kč) přesáhla částku dokladu (${expected} Kč i s tolerancí) — zbývá uhradit ${zbyva} Kč. Zkontrolujte částku nebo vyberte jiný doklad.`,
       });
     }
+    const fullyPaid = expected - newTotal <= overshootTolerance;
 
     const result = await store.transaction(async () => {
       await store.run("UPDATE bank_statement_line SET matched_document_id = ? WHERE id = ? AND accounting_unit_id = ?", [document_id, req.params.id, unitId]);
 
       let fxPosting = null;
       let marginPosting = null;
-      if (isForeign && doc.fx_rate) {
+      // Kurzové vyrovnání jen na řádku, který doklad doplácí do celé částky —
+      // na dílčích platbách před tím ještě neznáme finální rozdíl.
+      if (isForeign && doc.fx_rate && fullyPaid) {
         fxPosting = await postFxAdjustment({
           unitId, doc, line, diff: Math.round((czkPay - czkIssue) * 100) / 100,
           gainAccountNumber: "663", lossAccountNumber: "563", label: "Kurzový rozdíl", createdBy: created_by,
         });
         marginPosting = await postFxAdjustment({
-          unitId, doc, line, diff: Math.round((Math.abs(line.amount) - czkPay) * 100) / 100,
+          unitId, doc, line, diff: Math.round((newTotal - czkPay) * 100) / 100,
           gainAccountNumber: "668", lossAccountNumber: "568", label: "Kurzová marže banky", createdBy: created_by,
         });
       }
@@ -217,6 +236,10 @@ router.post("/:id/match", async (req, res) => {
         line: await store.get("SELECT * FROM bank_statement_line WHERE id = ?", [req.params.id]),
         fx_posting: fxPosting,
         margin_posting: marginPosting,
+        already_matched: alreadyMatched,
+        new_total: newTotal,
+        expected,
+        fully_paid: fullyPaid,
       };
     });
     store.persist();
