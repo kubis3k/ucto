@@ -53,6 +53,23 @@ router.patch("/:id", async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+// DELETE /api/bank/:id — smazání chybně zadaného/naimportovaného řádku (duplicita,
+// testovací data). Povoleno jen dokud je řádek nespárovaný a nezaúčtovaný — jakmile
+// vznikne posting, jde o skutečný účetní zápis a ten je append-only (storno, ne smazání).
+router.delete("/:id", async (req, res) => {
+  const unitId = req.user.accountingUnitId;
+  try {
+    const line = await store.get("SELECT * FROM bank_statement_line WHERE id = ? AND accounting_unit_id = ?", [req.params.id, unitId]);
+    if (!line) return res.status(404).json({ error: "Řádek výpisu nenalezen" });
+    if (line.matched_document_id || line.posting_id) return res.status(400).json({ error: "Řádek je už spárovaný/zaúčtovaný — nelze smazat, jen stornovat příslušný zápis." });
+
+    await store.run("DELETE FROM bank_statement_line WHERE id = ? AND accounting_unit_id = ?", [req.params.id, unitId]);
+    store.persist();
+    await writeAuditLog({ unitId, userId: req.user.id, action: "DELETE", table: "bank_statement_line", entityId: req.params.id, before: line });
+    res.status(204).end();
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 // POST /api/bank/import — ruční zadání / import řádků výpisu (kap. 5.4 brief — CSV v1. fázi mimo rozsah,
 // zde zadání strukturovaných řádků, které frontend může naplnit i z nahraného CSV)
 router.post("/import", async (req, res) => {

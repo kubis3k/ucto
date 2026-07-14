@@ -2243,6 +2243,7 @@ async function renderBank() {
                   ? `<button class="small" data-action="quick-post-suggested" data-id="${l.id}" data-account="${suggestion.account_id}" title="Návrh podle ${esc(suggestion.source)}">⚡ ${esc(suggestion.account_number)} ${esc(acctName(suggestion.account_number))}</button>`
                   : `<button class="small secondary" data-action="quick-post-manual" data-id="${l.id}">Zaúčtovat…</button>`}
                 <button class="small secondary" data-action="edit-bank-line" data-id="${l.id}" title="Opravit částku/datum/VS — např. špatně naimportovaný pohyb">Upravit</button>
+                <button class="small danger" data-action="delete-bank-line" data-id="${l.id}" title="Smazat chybný/duplicitní pohyb">Smazat</button>
               `}</td></tr>`;
         }).join("")
           : `<tr><td colspan="7" class="empty-state">Zatím žádné bankovní/pokladní pohyby.</td></tr>`}
@@ -2328,6 +2329,15 @@ async function handleEditBankLine(form) {
   toast("Pohyb byl opraven.");
   closeModal();
   renderBank();
+}
+
+async function deleteBankLine(id) {
+  if (!confirm("Opravdu smazat tento bankovní/pokladní pohyb?")) return;
+  try {
+    await api("DELETE", `/bank/${id}`);
+    toast("Pohyb byl smazán.");
+    renderBank();
+  } catch (err) { toast(err.message, "error"); }
 }
 
 function bankLineFormModal() {
@@ -3285,6 +3295,7 @@ document.addEventListener("click", async (e) => {
       case "quick-post-suggested": await quickPostSuggested(id, e.target.closest("[data-account]").dataset.account); break;
       case "quick-post-manual": quickPostManualModal(id); break;
       case "edit-bank-line": editBankLineModal(id); break;
+      case "delete-bank-line": await deleteBankLine(id); break;
       case "import-bank": bankImportModal(); break;
       case "csv-parse": csvParseRows(); break;
       case "confirm-import": await confirmBankImport(); break;
