@@ -113,6 +113,24 @@ CREATE TABLE IF NOT EXISTS accounting_period (
 );
 
 -- ---------------------------------------------------------------------
+-- Měsíční uzávěrka — dobrovolný "tvrdý zámek" na úrovni měsíce v rámci
+-- otevřeného účetního období (na rozdíl od roční uzávěrky výše, ta zamyká
+-- celý rok najednou). Existence řádku s unlocked_at IS NULL = měsíc je
+-- uzamčený; odemčení nemaže řádek (audit stopa), jen vyplní unlocked_at/by.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS period_month_lock (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    accounting_unit_id  INTEGER NOT NULL REFERENCES accounting_unit(id),
+    fiscal_year         INTEGER NOT NULL,
+    month               INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+    locked_at           TEXT NOT NULL DEFAULT (datetime('now')),
+    locked_by           INTEGER NOT NULL REFERENCES app_user(id),
+    unlocked_at         TEXT,
+    unlocked_by         INTEGER REFERENCES app_user(id),
+    UNIQUE (accounting_unit_id, fiscal_year, month)
+);
+
+-- ---------------------------------------------------------------------
 -- Kontakty
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS contact (
@@ -653,4 +671,32 @@ BEFORE INSERT ON posting
 WHEN (SELECT status FROM accounting_period WHERE id = NEW.period_id) = 'uzavrene'
 BEGIN
     SELECT RAISE(ABORT, 'Účetní období je uzavřené po inventarizaci — zápis není možný.');
+END;
+
+-- Měsíční uzávěrka — zápis s datem v uzamčeném měsíci je zakázán, i když je
+-- celý rok ještě otevřený (viz period_month_lock výše).
+CREATE TRIGGER IF NOT EXISTS trg_document_month_lock
+BEFORE INSERT ON document
+WHEN EXISTS (
+    SELECT 1 FROM period_month_lock
+    WHERE accounting_unit_id = NEW.accounting_unit_id
+      AND fiscal_year = CAST(substr(NEW.issue_date, 1, 4) AS INTEGER)
+      AND month = CAST(substr(NEW.issue_date, 6, 2) AS INTEGER)
+      AND unlocked_at IS NULL
+)
+BEGIN
+    SELECT RAISE(ABORT, 'Měsíc je uzamčen měsíční uzávěrkou — zápis s tímto datem není možný.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_posting_month_lock
+BEFORE INSERT ON posting
+WHEN EXISTS (
+    SELECT 1 FROM period_month_lock
+    WHERE accounting_unit_id = NEW.accounting_unit_id
+      AND fiscal_year = CAST(substr(NEW.posting_date, 1, 4) AS INTEGER)
+      AND month = CAST(substr(NEW.posting_date, 6, 2) AS INTEGER)
+      AND unlocked_at IS NULL
+)
+BEGIN
+    SELECT RAISE(ABORT, 'Měsíc je uzamčen měsíční uzávěrkou — zápis s tímto datem není možný.');
 END;

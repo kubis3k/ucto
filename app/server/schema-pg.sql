@@ -106,6 +106,19 @@ CREATE TABLE IF NOT EXISTS accounting_period (
     UNIQUE (accounting_unit_id, fiscal_year)
 );
 
+-- Měsíční uzávěrka — viz schema.sql pro vysvětlení, 1:1 překlad.
+CREATE TABLE IF NOT EXISTS period_month_lock (
+    id                  SERIAL PRIMARY KEY,
+    accounting_unit_id  INTEGER NOT NULL REFERENCES accounting_unit(id),
+    fiscal_year         INTEGER NOT NULL,
+    month               INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+    locked_at           TEXT NOT NULL DEFAULT (now()::text),
+    locked_by           INTEGER NOT NULL REFERENCES app_user(id),
+    unlocked_at         TEXT,
+    unlocked_by         INTEGER REFERENCES app_user(id),
+    UNIQUE (accounting_unit_id, fiscal_year, month)
+);
+
 CREATE TABLE IF NOT EXISTS contact (
     id                  SERIAL PRIMARY KEY,
     accounting_unit_id  INTEGER NOT NULL REFERENCES accounting_unit(id),
@@ -646,3 +659,40 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS trg_posting_period_lock ON posting;
 CREATE TRIGGER trg_posting_period_lock BEFORE INSERT ON posting
     FOR EACH ROW EXECUTE FUNCTION trg_fn_posting_period_lock();
+
+-- Měsíční uzávěrka — viz schema.sql pro vysvětlení, 1:1 překlad.
+CREATE OR REPLACE FUNCTION trg_fn_document_month_lock() RETURNS TRIGGER AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM period_month_lock
+        WHERE accounting_unit_id = NEW.accounting_unit_id
+          AND fiscal_year = substring(NEW.issue_date from 1 for 4)::int
+          AND month = substring(NEW.issue_date from 6 for 2)::int
+          AND unlocked_at IS NULL
+    ) THEN
+        RAISE EXCEPTION 'Měsíc je uzamčen měsíční uzávěrkou — zápis s tímto datem není možný.';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_document_month_lock ON document;
+CREATE TRIGGER trg_document_month_lock BEFORE INSERT ON document
+    FOR EACH ROW EXECUTE FUNCTION trg_fn_document_month_lock();
+
+CREATE OR REPLACE FUNCTION trg_fn_posting_month_lock() RETURNS TRIGGER AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM period_month_lock
+        WHERE accounting_unit_id = NEW.accounting_unit_id
+          AND fiscal_year = substring(NEW.posting_date from 1 for 4)::int
+          AND month = substring(NEW.posting_date from 6 for 2)::int
+          AND unlocked_at IS NULL
+    ) THEN
+        RAISE EXCEPTION 'Měsíc je uzamčen měsíční uzávěrkou — zápis s tímto datem není možný.';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_posting_month_lock ON posting;
+CREATE TRIGGER trg_posting_month_lock BEFORE INSERT ON posting
+    FOR EACH ROW EXECUTE FUNCTION trg_fn_posting_month_lock();

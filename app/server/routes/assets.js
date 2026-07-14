@@ -1,6 +1,6 @@
 const express = require("express");
 const store = require("../db");
-const { nextPostingNumber, writeAuditLog, assertPeriodOpen } = require("../lib/core");
+const { nextPostingNumber, writeAuditLog, assertPeriodOpen, assertMonthOpen } = require("../lib/core");
 const router = express.Router();
 
 // GET /api/assets?unit=1 — karty dlouhodobého majetku se zůstatkovou cenou (kap. 5.7 brief)
@@ -37,6 +37,7 @@ router.post("/:id/depreciate", async (req, res) => {
   try {
     const result = await store.transaction(async () => {
       await assertPeriodOpen(period_id);
+      await assertMonthOpen(req.user.accountingUnitId, entry_date);
       const asset = await store.get("SELECT * FROM fixed_asset WHERE id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
       if (!asset) throw new Error("Majetková karta nenalezena.");
       if (!asset.depreciation_account_id) throw new Error("Majetková karta nemá nastavený účet oprávek (082).");

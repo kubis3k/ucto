@@ -2903,9 +2903,13 @@ async function handleToggleVat(form) {
 // =====================================================================
 // INVENTARIZACE
 // =====================================================================
+const MONTH_LABELS = ["leden", "únor", "březen", "duben", "květen", "červen", "červenec", "srpen", "září", "říjen", "listopad", "prosinec"];
+
 async function renderInventory() {
   const unit = STATE.unit.id;
   const checks = await api("GET", `/inventory?unit=${unit}`);
+  const openPeriod = currentOpenPeriod();
+  const monthLocks = openPeriod ? await api("GET", `/periods/${openPeriod.id}/month-locks`) : [];
   document.getElementById("topbarActions").innerHTML = `<button data-action="new-inventory">+ Vygenerovat soupis</button>`;
   document.getElementById("view").innerHTML = `
     <div class="panel">
@@ -2920,6 +2924,26 @@ async function renderInventory() {
       </table></div>
     </div>
 
+    ${openPeriod ? `
+    <div class="panel">
+      <h2>Měsíční uzávěrka ${openPeriod.fiscal_year}</h2>
+      <p class="text-dim" style="margin-top:0">Uzamčení měsíce zabrání jakémukoli novému dokladu/zápisu s datem v tomto měsíci — vynuceno na úrovni databáze, ne jen v appce. Odemknout může jen admin/jednatel.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Měsíc</th><th>Stav</th><th></th><th></th></tr></thead>
+        <tbody>${MONTH_LABELS.map((label, i) => {
+          const m = i + 1;
+          const lock = monthLocks.find((l) => l.month === m && !l.unlocked_at);
+          return `<tr><td>${label}</td>
+            <td>${lock ? `<span class="badge zauctovany">uzamčeno ${fmtDate(lock.locked_at.slice(0, 10))}</span>` : `<span class="badge koncept">otevřeno</span>`}</td>
+            <td>${lock
+              ? `<button class="small secondary" data-action="unlock-month" data-period-id="${openPeriod.id}" data-month="${m}">Odemknout</button>`
+              : `<button class="small danger" data-action="lock-month" data-period-id="${openPeriod.id}" data-month="${m}">Uzamknout</button>`}</td>
+            <td><button class="small secondary" data-action="download-mesicni-uzaverka" data-period-id="${openPeriod.id}" data-month="${m}" data-label="${label}">PDF</button></td></tr>`;
+        }).join("")}
+        </tbody>
+      </table></div>
+    </div>` : ""}
+
     <div class="panel">
       <h2>Uzávěrka účetního období</h2>
       <div class="table-wrap"><table>
@@ -2932,6 +2956,38 @@ async function renderInventory() {
       </table></div>
     </div>
   `;
+}
+
+async function handleLockMonth(periodId, month) {
+  if (!confirm(`Uzamknout ${MONTH_LABELS[month - 1]}? Po uzamčení nepůjde zapsat žádný doklad/zápis s datem v tomto měsíci.`)) return;
+  try {
+    await api("POST", `/periods/${periodId}/lock-month`, { month, locked_by: STATE.user.id });
+    toast(`${MONTH_LABELS[month - 1]} byl uzamčen.`);
+    renderInventory();
+  } catch (err) { toast(err.message, "error"); }
+}
+async function handleUnlockMonth(periodId, month) {
+  if (!confirm(`Odemknout ${MONTH_LABELS[month - 1]}?`)) return;
+  try {
+    await api("POST", `/periods/${periodId}/unlock-month`, { month, unlocked_by: STATE.user.id });
+    toast(`${MONTH_LABELS[month - 1]} byl odemčen.`);
+    renderInventory();
+  } catch (err) { toast(err.message, "error"); }
+}
+async function downloadMesicniUzaverka(periodId, month, label) {
+  try {
+    const headers = {};
+    const token = authToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${API}/reports/mesicni-uzaverka.pdf?period=${periodId}&month=${month}`, { headers });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || res.statusText); }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `mesicni-uzaverka-${label}.pdf`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (err) { toast(err.message, "error"); }
 }
 
 function inventoryFormModal() {
@@ -3381,6 +3437,18 @@ document.addEventListener("click", async (e) => {
       case "view-inventory": showInventoryDetail(id); break;
       case "save-inventory-lines": saveInventoryLines(id); break;
       case "close-period": handleClosePeriod(id); break;
+      case "lock-month": {
+        const el = e.target.closest("[data-period-id]");
+        await handleLockMonth(el.dataset.periodId, Number(el.dataset.month)); break;
+      }
+      case "unlock-month": {
+        const el = e.target.closest("[data-period-id]");
+        await handleUnlockMonth(el.dataset.periodId, Number(el.dataset.month)); break;
+      }
+      case "download-mesicni-uzaverka": {
+        const el = e.target.closest("[data-period-id]");
+        await downloadMesicniUzaverka(el.dataset.periodId, Number(el.dataset.month), el.dataset.label); break;
+      }
 
       case "add-line": addLineRow(document.getElementById("linesEditor")); break;
       case "remove-line": e.target.closest(".line-row")?.remove(); break;

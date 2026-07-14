@@ -4,7 +4,7 @@ const path = require("path");
 const crypto = require("crypto");
 const multer = require("multer");
 const store = require("../db");
-const { generateDocumentNumber, nextPostingNumber, writeAuditLog, assertPeriodOpen, stornoPosting } = require("../lib/core");
+const { generateDocumentNumber, nextPostingNumber, writeAuditLog, assertPeriodOpen, assertMonthOpen, stornoPosting } = require("../lib/core");
 const qrplatba = require("../lib/qrplatba");
 const invoiceScan = require("../lib/invoiceScan");
 const { buildInvoicePdf } = require("../lib/invoicePdf");
@@ -74,6 +74,7 @@ router.post("/", async (req, res) => {
   try {
     const doc = await store.transaction(async () => {
       await assertPeriodOpen(period_id);
+      await assertMonthOpen(accounting_unit_id, issue_date);
       const year = new Date(issue_date).getFullYear();
       const docNumber = await generateDocumentNumber(accounting_unit_id, doc_type, year);
 
@@ -288,6 +289,7 @@ router.post("/:id/post", async (req, res) => {
       if (doc.status === "zauctovany") throw new Error("Doklad je již zaúčtovaný.");
       if (doc.status === "stornovany") throw new Error("Stornovaný doklad nelze zaúčtovat.");
       await assertPeriodOpen(doc.period_id);
+      await assertMonthOpen(doc.accounting_unit_id, doc.issue_date);
 
       const tpl = await store.get("SELECT * FROM posting_template WHERE id = ? AND accounting_unit_id = ?", [template_id, doc.accounting_unit_id]);
       if (!tpl) throw new Error("Předkontace nenalezena.");

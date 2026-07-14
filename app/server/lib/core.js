@@ -65,6 +65,20 @@ async function assertPeriodOpen(periodId) {
   if (period.status === "uzavrene") throw new Error("Účetní období je uzavřené po inventarizaci — zápis není možný.");
 }
 
+// Stejná kontrola jako trg_document_month_lock/trg_posting_month_lock v
+// schema.sql/schema-pg.sql (ty jsou nezbytný, neobejitelný backstop na úrovni
+// DB) — tady jen kvůli hezčí, srozumitelné chybové hlášce dřív, než dotaz
+// vůbec doletí k INSERTu a spadne na syrové SQLite/Postgres výjimce.
+async function assertMonthOpen(unitId, dateStr) {
+  if (!dateStr) return;
+  const [y, m] = dateStr.split("-");
+  const locked = await store.get(
+    "SELECT id FROM period_month_lock WHERE accounting_unit_id = ? AND fiscal_year = ? AND month = ? AND unlocked_at IS NULL",
+    [unitId, Number(y), Number(m)]
+  );
+  if (locked) throw new Error(`Měsíc ${Number(m)}/${y} je uzamčen měsíční uzávěrkou — zápis s tímto datem není možný.`);
+}
+
 // Jediný povolený způsob "zrušení" zaúčtovaného zápisu — nový, protichůdný
 // zápis (MD <-> D prohozeno), který odkazuje na původní přes storno_of_posting_id.
 async function stornoPosting(postingId, reason, userId) {
@@ -91,4 +105,4 @@ async function stornoPosting(postingId, reason, userId) {
   return newPostingId;
 }
 
-module.exports = { generateDocumentNumber, nextPostingNumber, writeAuditLog, assertPeriodOpen, stornoPosting };
+module.exports = { generateDocumentNumber, nextPostingNumber, writeAuditLog, assertPeriodOpen, assertMonthOpen, stornoPosting };

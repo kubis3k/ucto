@@ -1,6 +1,6 @@
 const express = require("express");
 const store = require("../db");
-const { nextPostingNumber, writeAuditLog, assertPeriodOpen, stornoPosting } = require("../lib/core");
+const { nextPostingNumber, writeAuditLog, assertPeriodOpen, assertMonthOpen, stornoPosting } = require("../lib/core");
 const router = express.Router();
 
 // GET /api/postings?unit=1
@@ -27,6 +27,7 @@ router.post("/", async (req, res) => {
   try {
     const posting = await store.transaction(async () => {
       await assertPeriodOpen(period_id);
+      await assertMonthOpen(accounting_unit_id, posting_date);
 
       const md = lines.filter((l) => l.side === "MD").reduce((s, l) => s + Number(l.amount), 0);
       const d = lines.filter((l) => l.side === "D").reduce((s, l) => s + Number(l.amount), 0);

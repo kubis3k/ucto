@@ -62,6 +62,63 @@ router.post("/periods/:id/close", async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+// GET /api/periods/:id/month-locks — přehled uzamčených měsíců daného období
+router.get("/periods/:id/month-locks", async (req, res) => {
+  try {
+    const period = await store.get("SELECT * FROM accounting_period WHERE id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
+    if (!period) return res.status(404).json({ error: "Účetní období nenalezeno." });
+    res.json(await store.all(
+      "SELECT * FROM period_month_lock WHERE accounting_unit_id = ? AND fiscal_year = ? ORDER BY month",
+      [req.user.accountingUnitId, period.fiscal_year]
+    ));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/periods/:id/lock-month — { month, locked_by } — měsíční uzávěrka
+// (tvrdý zámek na úrovni měsíce, viz trg_document_month_lock/trg_posting_month_lock
+// v schema.sql/schema-pg.sql — nelze obejít přes API, je to na úrovni DB triggeru).
+router.post("/periods/:id/lock-month", async (req, res) => {
+  const { month, locked_by } = req.body;
+  try {
+    const period = await store.get("SELECT * FROM accounting_period WHERE id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
+    if (!period) return res.status(404).json({ error: "Účetní období nenalezeno." });
+    const m = Number(month);
+    if (!Number.isInteger(m) || m < 1 || m > 12) return res.status(400).json({ error: "Neplatný měsíc (1-12)." });
+
+    await store.run(
+      `INSERT INTO period_month_lock (accounting_unit_id, fiscal_year, month, locked_at, locked_by, unlocked_at, unlocked_by)
+       VALUES (?,?,?,datetime('now'),?,NULL,NULL)
+       ON CONFLICT (accounting_unit_id, fiscal_year, month) DO UPDATE SET
+         locked_at = excluded.locked_at, locked_by = excluded.locked_by, unlocked_at = NULL, unlocked_by = NULL`,
+      [req.user.accountingUnitId, period.fiscal_year, m, locked_by || req.user.id]
+    );
+    store.persist();
+    await writeAuditLog({ unitId: req.user.accountingUnitId, userId: locked_by || req.user.id, action: "MONTH_LOCK", table: "period_month_lock", entityId: null, after: { fiscal_year: period.fiscal_year, month: m } });
+    res.json(await store.get("SELECT * FROM period_month_lock WHERE accounting_unit_id = ? AND fiscal_year = ? AND month = ?", [req.user.accountingUnitId, period.fiscal_year, m]));
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// POST /api/periods/:id/unlock-month — { month, unlocked_by } — jen admin/jednatel
+router.post("/periods/:id/unlock-month", async (req, res) => {
+  if (req.user.role !== "admin") return res.status(403).json({ error: "Odemknout měsíc může jen admin/jednatel." });
+  const { month, unlocked_by } = req.body;
+  try {
+    const period = await store.get("SELECT * FROM accounting_period WHERE id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
+    if (!period) return res.status(404).json({ error: "Účetní období nenalezeno." });
+    const m = Number(month);
+    const before = await store.get("SELECT * FROM period_month_lock WHERE accounting_unit_id = ? AND fiscal_year = ? AND month = ? AND unlocked_at IS NULL", [req.user.accountingUnitId, period.fiscal_year, m]);
+    if (!before) return res.status(400).json({ error: "Měsíc není uzamčený." });
+
+    await store.run(
+      "UPDATE period_month_lock SET unlocked_at = datetime('now'), unlocked_by = ? WHERE id = ?",
+      [unlocked_by || req.user.id, before.id]
+    );
+    store.persist();
+    await writeAuditLog({ unitId: req.user.accountingUnitId, userId: unlocked_by || req.user.id, action: "MONTH_UNLOCK", table: "period_month_lock", entityId: before.id, before, after: { unlocked: true } });
+    res.json(await store.get("SELECT * FROM period_month_lock WHERE id = ?", [before.id]));
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 // GET /api/units — vlastní účetní jednotka přihlášeného uživatele (jen jedna
 // v poli, kvůli zpětné kompatibilitě s rendererem — NIKDY ne cizí firmy).
 router.get("/units", async (req, res) => {

@@ -186,6 +186,44 @@ router.get("/zaverka.pdf", async (req, res) => {
   } catch (err) { res.status(err.status || 400).json({ error: err.message }); }
 });
 
+const MONTH_NAMES = ["leden", "únor", "březen", "duben", "květen", "červen", "červenec", "srpen", "září", "říjen", "listopad", "prosinec"];
+
+// GET /api/reports/mesicni-uzaverka.pdf?period=1&month=7 — interní manažerský
+// snapshot k poslednímu dni měsíce (rozvaha + výsledovka, BEZ přílohy — ta patří
+// jen k roční závěrce dle § 18 ZoÚ). Nevyžaduje, aby byl měsíc uzamčený — jde jen
+// o výstup dokumentující, co bylo uzavřeno v POST /periods/:id/lock-month.
+router.get("/mesicni-uzaverka.pdf", async (req, res) => {
+  try {
+    const unitId = req.user.accountingUnitId;
+    const periodId = req.query.period;
+    const month = Number(req.query.month);
+    if (!Number.isInteger(month) || month < 1 || month > 12) return res.status(400).json({ error: "Neplatný měsíc (1-12)." });
+    const period = await store.get("SELECT * FROM accounting_period WHERE id = ? AND accounting_unit_id = ?", [periodId, unitId]);
+    if (!period) return res.status(404).json({ error: "Účetní období nenalezeno." });
+    const unit = await store.get("SELECT * FROM accounting_unit WHERE id = ?", [unitId]);
+
+    const y = period.fiscal_year;
+    const lastDay = new Date(y, month, 0).getDate();
+    const asOfDate = `${y}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+
+    const [rozvahaData, vysledovkaData] = await Promise.all([
+      reports.rozvaha(unitId, asOfDate),
+      reports.vysledovka(unitId, periodId, asOfDate),
+    ]);
+
+    const pdfBuffer = await buildStatementPdf({
+      unit, period, rozvaha: rozvahaData, vysledovka: vysledovkaData, note: null, auto: null,
+      title: `Měsíční uzávěrka — ${MONTH_NAMES[month - 1]} ${y}`,
+      subtitle: `Stav k ${asOfDate.split("-").reverse().join(".")}`,
+      footerNote: "Interní manažerský přehled (rozvaha a výsledovka k danému dni) — nejde o účetní závěrku dle § 18 ZoÚ.",
+      skipPriloha: true,
+    });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="mesicni-uzaverka-${y}-${String(month).padStart(2, "0")}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (err) { res.status(err.status || 400).json({ error: err.message }); }
+});
+
 // POST /api/reports/precenit-kurzove?unit=1 — { asOf, created_by } — přecenění
 // otevřených cizoměnových pohledávek/závazků k rozvahovému dni (§ 24 odst. 6-7
 // ZoÚ). Explicitní akce, idempotentní (viz lib/fxRevaluation.js). Scope na

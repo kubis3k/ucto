@@ -46,7 +46,12 @@ function tableRows(pdf, startY, rows, cols) {
 // unit = accounting_unit, period = accounting_period, rozvaha/vysledovka =
 // výstup lib/reports.js, note = financial_statement_note row|null,
 // auto = prilohaAutoData() výstup.
-async function buildStatementPdf({ unit, period, rozvaha, vysledovka, note, auto }) {
+//
+// title/subtitle/asOfLabel/skipPriloha: volitelné pro měsíční uzávěrku
+// (routes/misc.js POST /periods/:id/lock-month) — jde o interní manažerský
+// snapshot k danému dni, NE o oficiální účetní závěrku dle § 18 ZoÚ, proto má
+// jiný titulek a vynechává přílohu (ta patří jen k roční závěrce).
+async function buildStatementPdf({ unit, period, rozvaha, vysledovka, note, auto, title, subtitle, footerNote, skipPriloha }) {
   const chunks = [];
   const pdf = new PDFDocument({ size: "A4", margin: 50 });
   pdf.on("data", (c) => chunks.push(c));
@@ -60,11 +65,11 @@ async function buildStatementPdf({ unit, period, rozvaha, vysledovka, note, auto
   pdf.font("Body");
 
   // --- Strana 1: titulka ---
-  pdf.font("Bold").fontSize(24).fillColor(INK).text(`Účetní závěrka ${period.fiscal_year}`, 50, 220, { width: 495, align: "center" });
+  pdf.font("Bold").fontSize(24).fillColor(INK).text(title || `Účetní závěrka ${period.fiscal_year}`, 50, 220, { width: 495, align: "center" });
   pdf.font("Body").fontSize(13).fillColor(DIM).text(unit.name || "—", 50, 260, { width: 495, align: "center" });
   pdf.fontSize(10).fillColor(FAINT).text(`IČO: ${unit.ico || "—"}${unit.dic ? "   DIČ: " + unit.dic : ""}`, 50, 282, { width: 495, align: "center" });
-  pdf.fontSize(10).fillColor(FAINT).text(`Účetní období: ${fmtDate(period.start_date)} – ${fmtDate(period.end_date)}`, 50, 300, { width: 495, align: "center" });
-  pdf.fontSize(9).fillColor(FAINT).text("Rozvaha, výsledovka a příloha k účetní závěrce (§ 18 zákona č. 563/1991 Sb., o účetnictví).", 50, 700, { width: 495, align: "center" });
+  pdf.fontSize(10).fillColor(FAINT).text(subtitle || `Účetní období: ${fmtDate(period.start_date)} – ${fmtDate(period.end_date)}`, 50, 300, { width: 495, align: "center" });
+  pdf.fontSize(9).fillColor(FAINT).text(footerNote || "Rozvaha, výsledovka a příloha k účetní závěrce (§ 18 zákona č. 563/1991 Sb., o účetnictví).", 50, 700, { width: 495, align: "center" });
 
   // --- Strana 2: Rozvaha ---
   pdf.addPage();
@@ -122,7 +127,8 @@ async function buildStatementPdf({ unit, period, rozvaha, vysledovka, note, auto
     pdf.font("Body").fontSize(10).fillColor(DIM).text("Za dané období není k dispozici výsledovka.", 50, y);
   }
 
-  // --- Strana 4+: Příloha ---
+  // --- Strana 4+: Příloha (jen u roční závěrky, ne u měsíční uzávěrky) ---
+  if (!skipPriloha) {
   pdf.addPage();
   pageHeader(pdf, "Příloha k účetní závěrce (§ 18 zákona o účetnictví)", unit);
   y = 108;
@@ -192,6 +198,7 @@ async function buildStatementPdf({ unit, period, rozvaha, vysledovka, note, auto
 
   section("6. Doplňující informace");
   paragraph(note?.doplnujici_informace);
+  }
 
   pdf.end();
   return done;
