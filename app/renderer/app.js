@@ -2193,6 +2193,7 @@ async function renderBank() {
   ]);
   await refreshCoreState();
   STATE._bankCategorySuggestions = Object.fromEntries(categorySuggestions.map((s) => [s.bank_line_id, s]));
+  STATE._bankLines = lines;
 
   document.getElementById("topbarActions").innerHTML = `
     <button class="secondary" data-action="import-bank">Importovat výpis (CSV/XML)</button>
@@ -2241,6 +2242,7 @@ async function renderBank() {
                 ${suggestion
                   ? `<button class="small" data-action="quick-post-suggested" data-id="${l.id}" data-account="${suggestion.account_id}" title="Návrh podle ${esc(suggestion.source)}">⚡ ${esc(suggestion.account_number)} ${esc(acctName(suggestion.account_number))}</button>`
                   : `<button class="small secondary" data-action="quick-post-manual" data-id="${l.id}">Zaúčtovat…</button>`}
+                <button class="small secondary" data-action="edit-bank-line" data-id="${l.id}" title="Opravit částku/datum/VS — např. špatně naimportovaný pohyb">Upravit</button>
               `}</td></tr>`;
         }).join("")
           : `<tr><td colspan="7" class="empty-state">Zatím žádné bankovní/pokladní pohyby.</td></tr>`}
@@ -2253,11 +2255,11 @@ async function renderBank() {
       if (!e.target.value) return;
       try {
         const result = await api("POST", `/bank/${sel.dataset.matchId}/match`, { document_id: e.target.value, created_by: STATE.user.id });
-        if (result?.fx_posting) {
-          toast(`Pohyb spárován. Vznikl vyrovnávací zápis kurzového rozdílu (zápis č. ${result.fx_posting.posting_number}).`);
-        } else {
-          toast("Pohyb byl spárován s dokladem.");
-        }
+        const extra = [
+          result?.fx_posting ? `kurzový rozdíl (zápis č. ${result.fx_posting.posting_number})` : null,
+          result?.margin_posting ? `kurzová marže banky (zápis č. ${result.margin_posting.posting_number})` : null,
+        ].filter(Boolean);
+        toast(extra.length ? `Pohyb spárován. Vznikl vyrovnávací zápis: ${extra.join(", ")}.` : "Pohyb byl spárován s dokladem.");
       } catch (err) {
         toast(err.message, "error");
       }
@@ -2297,6 +2299,35 @@ async function handleQuickPostManual(form) {
   const accountId = new FormData(form).get("account_id");
   await quickPostSuggested(lineId, accountId);
   closeModal();
+}
+
+// Oprava nespárovaného řádku výpisu — např. špatně naimportovaná/naparsovaná
+// částka (viz PATCH /api/bank/:id, povoleno jen dokud není řádek spárovaný).
+function editBankLineModal(id) {
+  const line = (STATE._bankLines || []).find((l) => String(l.id) === String(id));
+  if (!line) return toast("Řádek nenalezen — obnovte stránku.", "error");
+  showModal(`
+    <h2>Opravit bankovní/pokladní pohyb</h2>
+    <form data-form="edit-bank-line" data-id="${line.id}">
+      <div class="form-grid">
+        <div><label>Datum</label><input type="date" name="statement_date" value="${line.statement_date}" required /></div>
+        <div><label>Částka (kladné=příjem, záporné=výdej)</label><input type="number" step="0.01" name="amount" value="${line.amount}" required /></div>
+        <div><label>Variabilní symbol</label><input type="text" name="variable_symbol" value="${esc(line.variable_symbol || "")}" /></div>
+      </div>
+      <label>Protistrana</label><input type="text" name="counterparty_name" value="${esc(line.counterparty_name || "")}" />
+      <div class="form-actions">
+        <button type="submit">Uložit</button>
+        <button type="button" class="secondary" data-action="close-modal">Zrušit</button>
+      </div>
+    </form>
+  `);
+}
+async function handleEditBankLine(form) {
+  const fd = new FormData(form);
+  await api("PATCH", `/bank/${form.dataset.id}`, Object.fromEntries(fd.entries()));
+  toast("Pohyb byl opraven.");
+  closeModal();
+  renderBank();
 }
 
 function bankLineFormModal() {
@@ -3253,6 +3284,7 @@ document.addEventListener("click", async (e) => {
       case "new-bank-line": bankLineFormModal(); break;
       case "quick-post-suggested": await quickPostSuggested(id, e.target.closest("[data-account]").dataset.account); break;
       case "quick-post-manual": quickPostManualModal(id); break;
+      case "edit-bank-line": editBankLineModal(id); break;
       case "import-bank": bankImportModal(); break;
       case "csv-parse": csvParseRows(); break;
       case "confirm-import": await confirmBankImport(); break;
@@ -3404,6 +3436,7 @@ document.addEventListener("submit", async (e) => {
       case "create-project": await handleCreateProject(e.target); break;
       case "create-bank-line": await handleCreateBankLine(e.target); break;
       case "quick-post-manual": await handleQuickPostManual(e.target); break;
+      case "edit-bank-line": await handleEditBankLine(e.target); break;
       case "create-asset": await handleCreateAsset(e.target); break;
       case "create-inventory": await handleCreateInventory(e.target); break;
       case "toggle-vat": await handleToggleVat(e.target); break;

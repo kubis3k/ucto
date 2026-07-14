@@ -27,6 +27,32 @@ router.get("/", async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// PATCH /api/bank/:id — oprava řádku výpisu (např. špatně naparsovaná/naimportovaná
+// částka). Povoleno jen dokud je řádek nespárovaný — po spárování by úprava částky
+// rozjela už vzniklé zaúčtování (kurzový rozdíl, marže banky) mimo realitu.
+router.patch("/:id", async (req, res) => {
+  const unitId = req.user.accountingUnitId;
+  const { amount, statement_date, counterparty_name, variable_symbol } = req.body;
+  try {
+    const line = await store.get("SELECT * FROM bank_statement_line WHERE id = ? AND accounting_unit_id = ?", [req.params.id, unitId]);
+    if (!line) return res.status(404).json({ error: "Řádek výpisu nenalezen" });
+    if (line.matched_document_id) return res.status(400).json({ error: "Řádek je už spárovaný s dokladem — úprava částky by neodpovídala zaúčtování. Zrušte párování, nebo opravte ručním zaúčtováním." });
+
+    await store.run(
+      `UPDATE bank_statement_line SET
+        amount = COALESCE(?, amount),
+        statement_date = COALESCE(?, statement_date),
+        counterparty_name = COALESCE(?, counterparty_name),
+        variable_symbol = COALESCE(?, variable_symbol)
+       WHERE id = ? AND accounting_unit_id = ?`,
+      [amount === undefined ? null : amount, statement_date || null, counterparty_name === undefined ? null : counterparty_name,
+       variable_symbol === undefined ? null : variable_symbol, req.params.id, unitId]
+    );
+    store.persist();
+    res.json(await store.get("SELECT * FROM bank_statement_line WHERE id = ?", [req.params.id]));
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 // POST /api/bank/import — ruční zadání / import řádků výpisu (kap. 5.4 brief — CSV v1. fázi mimo rozsah,
 // zde zadání strukturovaných řádků, které frontend může naplnit i z nahraného CSV)
 router.post("/import", async (req, res) => {
@@ -52,6 +78,61 @@ router.post("/import", async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+// Maximální reálný rozptyl mezi kurzem ČNB (referenční) a komerčním kurzem
+// banky při skutečné konverzi měny — běžně 1-5 %. 10% je bezpečná horní mez,
+// která pokryje i horší kurzy, ale pořád spolehlivě odchytí skutečnou částečnou
+// úhradu nebo spárování s nesprávným dokladem (ty bývají o desítky procent mimo).
+const FX_BANK_MARGIN_TOLERANCE = 0.10;
+
+// Zapíše vyrovnávací zápis (kurzový rozdíl NEBO bankovní kurzová marže) proti
+// stejnému účtu pohledávky/závazku (311/321) napojenému na doklad. Sdílená
+// znaménková logika pro obě odchylky — jen jiné cílové účty a popisek.
+async function postFxAdjustment({ unitId, doc, line, diff, gainAccountNumber, lossAccountNumber, label, createdBy }) {
+  if (Math.abs(diff) < 0.01) return null;
+  const prefix = doc.doc_type === "faktura_vydana" ? "311" : "321";
+  const linkedLine = await store.get(
+    `SELECT pl.account_id FROM posting_line pl
+     JOIN posting p ON p.id = pl.posting_id
+     JOIN chart_of_accounts coa ON coa.id = pl.account_id
+     WHERE p.document_id = ? AND p.accounting_unit_id = ? AND coa.account_number LIKE ?
+     LIMIT 1`,
+    [doc.id, unitId, prefix + "%"]
+  );
+  if (!linkedLine) return null;
+
+  // Vydaná (pohledávka 311) — zisk když diff>0 (dostali jsme/dostaneme víc, než
+  // jsme čekali) -> MD 311/D zisk. Přijatá (závazek 321) je zrcadlová — zisk
+  // když diff<0 (zaplatili jsme míň, než jsme dlužili) -> MD 321/D zisk.
+  const gain = doc.doc_type === "faktura_vydana" ? diff > 0 : diff < 0;
+  const account = await store.get(
+    "SELECT id FROM chart_of_accounts WHERE accounting_unit_id = ? AND account_number = ?",
+    [unitId, gain ? gainAccountNumber : lossAccountNumber]
+  );
+  if (!account) return null;
+
+  const amt = Math.abs(diff);
+  const postLines = gain
+    ? [{ account_id: linkedLine.account_id, side: "MD", amount: amt }, { account_id: account.id, side: "D", amount: amt }]
+    : [{ account_id: account.id, side: "MD", amount: amt }, { account_id: linkedLine.account_id, side: "D", amount: amt }];
+
+  const postingNumber = await nextPostingNumber(unitId);
+  await store.run(
+    `INSERT INTO posting (accounting_unit_id, period_id, posting_number, document_id, posting_date, description, created_by)
+     VALUES (?,?,?,?,?,?,?)`,
+    [unitId, doc.period_id, postingNumber, doc.id, line.statement_date, `${label} k úhradě ${doc.doc_number}`, createdBy || null]
+  );
+  const postingId = (await store.get("SELECT last_insert_rowid() AS id")).id;
+  for (const l of postLines) {
+    await store.run(`INSERT INTO posting_line (posting_id, account_id, side, amount) VALUES (?,?,?,?)`, [postingId, l.account_id, l.side, l.amount]);
+  }
+  const posting = await store.get("SELECT * FROM posting WHERE id = ?", [postingId]);
+  await writeAuditLog({
+    unitId, userId: createdBy, action: "POST", table: "posting", entityId: postingId,
+    after: { kind: label, document_id: doc.id, diff, gain },
+  });
+  return posting;
+}
+
 // POST /api/bank/:id/match — spárování řádku výpisu s dokladem (faktura/pokladní doklad).
 // FIX (critic 2026-07-09): scope na accounting_unit_id (IDOR) + odmítnutí
 // neshody částky (viz lib/bankMovements.amountsMatch — částečná úhrada by
@@ -60,6 +141,14 @@ router.post("/import", async (req, res) => {
 // v CZK) porovnává s CZK ekvivalentem dokladu K DATU ÚHRADY (kurz ČNB toho dne),
 // ne s raw total_amount v cizí měně. Pokud se kurz vystavení a úhrady liší,
 // vygeneruje se navíc vyrovnávací zápis kurzového rozdílu (563/663 proti 311/321).
+// FIX (2026-07-13): banka reálně směňuje za VLASTNÍ komerční kurz, ne za kurz
+// ČNB — přesná shoda na 0.01 Kč je tedy pro cizoměnové doklady nereálná (viz
+// příklad RB vs. ČNB, rozdíl ~3,4 %). Místo tvrdého odmítnutí se teď povolí
+// tolerance FX_BANK_MARGIN_TOLERANCE a rozdíl (skutečná částka banky vs. ČNB
+// kurz k datu úhrady) se zaúčtuje zvlášť jako "kurzová marže banky" (568/668),
+// odděleně od kurzového rozdílu vystavení→úhrada (563/663) — jde o dvě různé
+// věci: kurzový rozdíl je posun kurzu ČNB v čase, marže banky je cena za
+// směnu u konkrétní banky, není to kurzový rozdíl ve smyslu zákona.
 router.post("/:id/match", async (req, res) => {
   const { document_id, created_by } = req.body;
   const unitId = req.user.accountingUnitId;
@@ -80,9 +169,10 @@ router.post("/:id/match", async (req, res) => {
       }
       czkPay = Math.round(doc.total_amount * (ratePay.rate / (ratePay.unit || 1)) * 100) / 100;
       if (doc.fx_rate) czkIssue = Math.round(doc.total_amount * (doc.fx_rate / (doc.fx_rate_unit || 1)) * 100) / 100;
-      if (!amountsMatch(line.amount, czkPay)) {
+      const diffRatio = czkPay > 0 ? Math.abs(Math.abs(line.amount) - czkPay) / czkPay : 1;
+      if (diffRatio > FX_BANK_MARGIN_TOLERANCE) {
         return res.status(400).json({
-          error: `Částka pohybu (${Math.abs(line.amount)} Kč) neodpovídá CZK ekvivalentu dokladu k datu úhrady (${czkPay} Kč, kurz ${doc.currency}) — nelze spárovat celou fakturu s částečnou úhradou. Pro částečné úhrady použijte zaúčtování bez dokladu (quick-post).`,
+          error: `Částka pohybu (${Math.abs(line.amount)} Kč) neodpovídá CZK ekvivalentu dokladu k datu úhrady (${czkPay} Kč, kurz ${doc.currency}) ani s tolerancí ${FX_BANK_MARGIN_TOLERANCE * 100}% na kurzovou marži banky — nelze spárovat celou fakturu s částečnou úhradou. Pro částečné úhrady použijte zaúčtování bez dokladu (quick-post).`,
         });
       }
     } else if (!amountsMatch(line.amount, doc.total_amount)) {
@@ -95,56 +185,22 @@ router.post("/:id/match", async (req, res) => {
       await store.run("UPDATE bank_statement_line SET matched_document_id = ? WHERE id = ? AND accounting_unit_id = ?", [document_id, req.params.id, unitId]);
 
       let fxPosting = null;
+      let marginPosting = null;
       if (isForeign && doc.fx_rate) {
-        const diff = Math.round((czkPay - czkIssue) * 100) / 100;
-        if (Math.abs(diff) >= 0.01) {
-          const prefix = doc.doc_type === "faktura_vydana" ? "311" : "321";
-          const linkedLine = await store.get(
-            `SELECT pl.account_id FROM posting_line pl
-             JOIN posting p ON p.id = pl.posting_id
-             JOIN chart_of_accounts coa ON coa.id = pl.account_id
-             WHERE p.document_id = ? AND p.accounting_unit_id = ? AND coa.account_number LIKE ?
-             LIMIT 1`,
-            [doc.id, unitId, prefix + "%"]
-          );
-          if (linkedLine) {
-            // Znaménková logika (viz flow-state.md plán úkolu 4, krok 5): vydaná
-            // (pohledávka 311) — zisk když czkPay>czkIssue (dostali jsme víc, než
-            // jsme čekali) -> MD 311/D 663; ztráta opačně -> MD 563/D 311.
-            // Přijatá (závazek 321) je zrcadlová — zisk když czkPay<czkIssue
-            // (zaplatili jsme míň, než jsme dlužili) -> MD 321/D 663; ztráta opačně.
-            const gain = doc.doc_type === "faktura_vydana" ? diff > 0 : diff < 0;
-            const fxAccountNumber = gain ? "663" : "563";
-            const fxAccount = await store.get(
-              "SELECT id FROM chart_of_accounts WHERE accounting_unit_id = ? AND account_number = ?",
-              [unitId, fxAccountNumber]
-            );
-            if (fxAccount) {
-              const amt = Math.abs(diff);
-              const postLines = gain
-                ? [{ account_id: linkedLine.account_id, side: "MD", amount: amt }, { account_id: fxAccount.id, side: "D", amount: amt }]
-                : [{ account_id: fxAccount.id, side: "MD", amount: amt }, { account_id: linkedLine.account_id, side: "D", amount: amt }];
-
-              const postingNumber = await nextPostingNumber(unitId);
-              await store.run(
-                `INSERT INTO posting (accounting_unit_id, period_id, posting_number, document_id, posting_date, description, created_by)
-                 VALUES (?,?,?,?,?,?,?)`,
-                [unitId, doc.period_id, postingNumber, doc.id, line.statement_date, `Kurzový rozdíl k úhradě ${doc.doc_number}`, created_by || null]
-              );
-              const postingId = (await store.get("SELECT last_insert_rowid() AS id")).id;
-              for (const l of postLines) {
-                await store.run(`INSERT INTO posting_line (posting_id, account_id, side, amount) VALUES (?,?,?,?)`, [postingId, l.account_id, l.side, l.amount]);
-              }
-              fxPosting = await store.get("SELECT * FROM posting WHERE id = ?", [postingId]);
-              await writeAuditLog({
-                unitId, userId: created_by, action: "POST", table: "posting", entityId: postingId,
-                after: { kind: "kurzovy_rozdil", document_id: doc.id, diff, gain },
-              });
-            }
-          }
-        }
+        fxPosting = await postFxAdjustment({
+          unitId, doc, line, diff: Math.round((czkPay - czkIssue) * 100) / 100,
+          gainAccountNumber: "663", lossAccountNumber: "563", label: "Kurzový rozdíl", createdBy: created_by,
+        });
+        marginPosting = await postFxAdjustment({
+          unitId, doc, line, diff: Math.round((Math.abs(line.amount) - czkPay) * 100) / 100,
+          gainAccountNumber: "668", lossAccountNumber: "568", label: "Kurzová marže banky", createdBy: created_by,
+        });
       }
-      return { line: await store.get("SELECT * FROM bank_statement_line WHERE id = ?", [req.params.id]), fx_posting: fxPosting };
+      return {
+        line: await store.get("SELECT * FROM bank_statement_line WHERE id = ?", [req.params.id]),
+        fx_posting: fxPosting,
+        margin_posting: marginPosting,
+      };
     });
     store.persist();
     res.json(result);
