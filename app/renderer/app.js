@@ -633,6 +633,26 @@ async function bootstrap() {
   updateVatBadge();
   const whoAmI = document.getElementById("whoAmI");
   if (whoAmI) whoAmI.innerHTML = `${esc(STATE.user.full_name)} <a href="#" data-action="logout" style="color:var(--text-faint)">(odhlásit)</a>`;
+  maybeShowDesktopRecommendationBanner();
+}
+
+// Doporučení stáhnout desktop appku — jen ve webové verzi (v Electronu je
+// window.desktopUpdater definované, viz preload.js), ne při každém přihlášení
+// (localStorage flag, připomene se znovu až za 30 dní, ne otravně pořád).
+function maybeShowDesktopRecommendationBanner() {
+  if (typeof window.desktopUpdater !== "undefined") return; // už jsme v desktop appce
+  const dismissedAt = Number(localStorage.getItem("desktopRecommendationDismissedAt") || 0);
+  if (Date.now() - dismissedAt < 30 * 24 * 60 * 60 * 1000) return;
+  if (document.getElementById("desktopRecommendationBanner")) return;
+  const banner = document.createElement("div");
+  banner.id = "desktopRecommendationBanner";
+  banner.className = "offline-banner update-banner";
+  banner.innerHTML = `Doporučujeme stáhnout desktopovou appku pro Windows/Mac — rychlejší start, nativní okno. <a href="#settings" data-action="dismiss-desktop-banner">Stáhnout</a> <button type="button" data-action="dismiss-desktop-banner">Zavřít</button>`;
+  appendStackedBanner(banner);
+}
+function dismissDesktopBanner() {
+  localStorage.setItem("desktopRecommendationDismissedAt", String(Date.now()));
+  document.getElementById("desktopRecommendationBanner")?.remove();
 }
 
 function updateVatBadge() {
@@ -3122,6 +3142,16 @@ async function renderSettings() {
         <div style="grid-column:1/-1"><button type="submit">Uložit</button></div>
       </form>
     </div>
+    ${typeof window.desktopUpdater === "undefined" ? `
+    <div class="panel">
+      <h2>Desktopová appka</h2>
+      <p class="text-dim" style="margin-top:0">Stáhne se poslední verze z GitHub Releases. Mac appka není podepsaná Apple certifikátem — při prvním spuštění je nutné přes pravé tlačítko myši → Otevřít (Gatekeeper jinak ukáže "neznámý vývojář").</p>
+      <div class="form-actions">
+        <button type="button" data-action="download-desktop" data-id="win">Stáhnout pro Windows</button>
+        <button type="button" class="secondary" data-action="download-desktop" data-id="mac">Stáhnout pro Mac</button>
+      </div>
+    </div>` : ""}
+
     <div class="panel">
       <h2>Uživatelé a role</h2>
       <div class="table-wrap"><table>
@@ -3162,6 +3192,28 @@ async function renderSettings() {
       `}
     </div>
   `;
+}
+
+// Stáhne desktop instalátor (Windows/Mac) přes autentizovaný fetch — repo je
+// privátní, server proxy stream z GitHub Releases (viz routes/download.js).
+async function downloadDesktopInstaller(platform) {
+  try {
+    const headers = {};
+    const token = authToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    toast("Stahuji instalátor…");
+    const res = await fetch(`${API}/download/desktop?platform=${platform}`, { headers });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || res.statusText); }
+    const disposition = res.headers.get("Content-Disposition") || "";
+    const filenameMatch = disposition.match(/filename="([^"]+)"/);
+    const filename = filenameMatch ? filenameMatch[1] : (platform === "mac" ? "GlobaalElevate.dmg" : "GlobaalElevate.exe");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (err) { toast(err.message, "error"); }
 }
 
 async function handleUpdateUnit(form) {
@@ -3542,6 +3594,8 @@ document.addEventListener("submit", async (e) => {
       case "create-recurring": await handleCreateRecurring(e.target); break;
       case "save-priloha": await handleSavePriloha(e.target); break;
       case "edane-xml": await downloadEdaneXml(e.target, e.submitter?.value); break;
+      case "dismiss-desktop-banner": dismissDesktopBanner(); break;
+      case "download-desktop": await downloadDesktopInstaller(id); break;
     }
   } catch (err) {
     toast(err.message, "error");

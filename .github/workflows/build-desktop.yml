@@ -1,0 +1,48 @@
+name: Build desktop installers
+
+# Spouští se ručně (workflow_dispatch) nebo při pushnutí tagu v* (např. v1.0.2).
+# Windows a Mac se builduje paralelně na dvou runnerech, protože electron-builder
+# neumí spolehlivě cross-buildovat podepsaný/plně funkční .dmg z jiného OS než
+# macOS. Mac build je NEPODEPSANÝ (žádný Apple Developer certifikát) — uživatelé
+# uvidí Gatekeeper varování "neznámý vývojář" a musí appku otevřít přes
+# pravé tlačítko → Otevřít (nebo Nastavení systému → Ochrana osobních údajů
+# a zabezpečení → Přesto otevřít).
+permissions:
+  contents: write
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            args: --win nsis --publish never
+          - os: macos-latest
+            args: --mac dmg zip --publish never
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npx electron-builder ${{ matrix.args }}
+      - name: Upload build artifacts as GitHub Release assets
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: |
+            app/dist/*.exe
+            app/dist/*.dmg
+            app/dist/*.zip
+            app/dist/*.blockmap
+            app/dist/latest*.yml

@@ -94,6 +94,7 @@ async function buildApp(userDataDir) {
   app.use("/api/price-list", require("./routes/pricelist"));
   app.use("/api/offers", require("./routes/offers"));
   app.use("/api/recurring", require("./routes/recurring"));
+  app.use("/api/download", require("./routes/download"));
   app.use("/api", require("./routes/misc")); // /api/accounts, /api/periods, /api/units, /api/users
 
   app.get("/health", (req, res) => res.json({ status: "ok" }));

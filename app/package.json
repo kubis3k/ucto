@@ -12,7 +12,8 @@
     "dev:server": "node server/index.js",
     "dev:renderer": "node dev-static-server.js",
     "dist": "electron-builder --win nsis",
-    "dist:dir": "electron-builder --win dir"
+    "dist:dir": "electron-builder --win dir",
+    "dist:mac": "electron-builder --mac dmg zip"
   },
   "dependencies": {
     "electron-updater": "^6.3.9"
@@ -66,6 +67,19 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
+    },
+    "mac": {
+      "category": "public.app-category.finance",
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] },
+        { "target": "zip", "arch": ["x64", "arm64"] }
+      ],
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "sign": false
     }
   }
 }
