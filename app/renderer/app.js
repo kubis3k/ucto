@@ -636,11 +636,19 @@ async function bootstrap() {
   maybeShowDesktopRecommendationBanner();
 }
 
-// Doporučení stáhnout desktop appku — jen ve webové verzi (v Electronu je
-// window.desktopUpdater definované, viz preload.js), ne při každém přihlášení
-// (localStorage flag, připomene se znovu až za 30 dní, ne otravně pořád).
+// Detekce "běžíme v Electronu" — navigator.userAgent nastavuje sám Chromium
+// uvnitř Electronu, funguje nezávisle na verzi nainstalovaného main.js/preload.js
+// (na rozdíl od window.desktopUpdater, které starší nainstalovaný shell nemusí
+// mít vůbec — přesně tohle způsobilo, že se doporučení stažení appky ukazovalo
+// i uvnitř samotné desktopové appky, viz oprava 2026-07-16).
+function isDesktopShell() {
+  return /Electron/i.test(navigator.userAgent) || typeof window.desktopUpdater !== "undefined";
+}
+
+// Doporučení stáhnout desktop appku — jen ve webové verzi, ne při každém
+// přihlášení (localStorage flag, připomene se znovu až za 30 dní, ne otravně pořád).
 function maybeShowDesktopRecommendationBanner() {
-  if (typeof window.desktopUpdater !== "undefined") return; // už jsme v desktop appce
+  if (isDesktopShell()) return; // už jsme v desktop appce
   const dismissedAt = Number(localStorage.getItem("desktopRecommendationDismissedAt") || 0);
   if (Date.now() - dismissedAt < 30 * 24 * 60 * 60 * 1000) return;
   if (document.getElementById("desktopRecommendationBanner")) return;
@@ -3142,7 +3150,7 @@ async function renderSettings() {
         <div style="grid-column:1/-1"><button type="submit">Uložit</button></div>
       </form>
     </div>
-    ${typeof window.desktopUpdater === "undefined" ? `
+    ${!isDesktopShell() ? `
     <div class="panel">
       <h2>Desktopová appka</h2>
       <p class="text-dim" style="margin-top:0">Stáhne se poslední verze z GitHub Releases. Mac appka není podepsaná Apple certifikátem — při prvním spuštění je nutné přes pravé tlačítko myši → Otevřít (Gatekeeper jinak ukáže "neznámý vývojář").</p>
