@@ -72,14 +72,31 @@ router.delete("/:id", async (req, res) => {
 
 // POST /api/bank/import — ruční zadání / import řádků výpisu (kap. 5.4 brief — CSV v1. fázi mimo rozsah,
 // zde zadání strukturovaných řádků, které frontend může naplnit i z nahraného CSV)
+//
+// FIX (2026-07-20, opakovaný/celý-historie CSV import): CSV export z banky
+// nemá vlastní unikátní ID (na rozdíl od e-mailového/Stripe importu, tam
+// idempotenci řeší external_ref v createBankStatementLine) — když se stejný
+// nebo překrývající se výpis nahraje podruhé (např. "celá historie" po
+// předchozím dílčím importu), řádky bez external_ref by se vložily znovu
+// jako duplicity. Řádek se tedy PŘESKOČÍ, pokud už existuje jiný se stejným
+// (accounting_unit_id, bank_account, statement_date, amount) — to je jediná
+// spolehlivá shoda, kterou z prostého CSV (datum+částka) máme.
 router.post("/import", async (req, res) => {
   const { accounting_unit_id, bank_account, lines } = req.body;
   if (!Array.isArray(lines)) return res.status(400).json({ error: "Očekává se pole 'lines'." });
   try {
-    const inserted = await store.transaction(async () => {
-      const rows = [];
+    const result = await store.transaction(async () => {
+      const inserted = [];
+      let skipped = 0;
       for (const l of lines) {
-        rows.push(await createBankStatementLine({
+        if (!l.external_ref) {
+          const existing = await store.get(
+            `SELECT id FROM bank_statement_line WHERE accounting_unit_id = ? AND bank_account = ? AND statement_date = ? AND amount = ?`,
+            [accounting_unit_id, bank_account, l.statement_date, l.amount]
+          );
+          if (existing) { skipped += 1; continue; }
+        }
+        inserted.push(await createBankStatementLine({
           unitId: accounting_unit_id,
           bankAccount: bank_account,
           date: l.statement_date,
@@ -89,9 +106,9 @@ router.post("/import", async (req, res) => {
           externalRef: l.external_ref,
         }));
       }
-      return rows;
+      return { inserted, skipped };
     });
-    res.status(201).json(inserted);
+    res.status(201).json(result);
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 

@@ -2399,12 +2399,12 @@ function bankLineFormModal() {
 async function handleCreateBankLine(form) {
   const fd = new FormData(form);
   const body = Object.fromEntries(fd.entries());
-  await api("POST", "/bank/import", {
+  const result = await api("POST", "/bank/import", {
     accounting_unit_id: STATE.unit.id,
     bank_account: body.bank_account,
     lines: [{ statement_date: body.statement_date, amount: Number(body.amount), counterparty_name: body.counterparty_name, variable_symbol: body.variable_symbol }],
   });
-  toast("Pohyb byl zaznamenán.");
+  toast(result.skipped ? "Stejný pohyb (datum+částka+účet) už v systému je — nezadáno znovu." : "Pohyb byl zaznamenán.");
   closeModal();
   renderBank();
 }
@@ -2471,7 +2471,12 @@ function parseCamt053(xmlText) {
       const m = r.textContent.match(/(\d{4,10})/); if (m && !vs) vs = m[1]; // nejdelší číselný běh (VS bývá 4–10 číslic)
     });
     if (!vs) { const m = msg.match(/VS[:\s]?(\d{1,10})/i); if (m) vs = m[1]; }
-    return { statement_date: date, amount, counterparty_name: party || null, variable_symbol: vs || null };
+    // Banka vlastní unikátní reference pohybu (NtryRef/AcctSvcrRef) — na
+    // rozdíl od CSV (jen datum+částka, viz server routes/bank.js dedup
+    // heuristika) umožňuje přesnou idempotenci při opakovaném/překrývajícím
+    // se importu XML výpisu, ne jen shodu podle data+částky.
+    const ref = txt(ntry, "NtryRef") || txt(ntry, "AcctSvcrRef") || null;
+    return { statement_date: date, amount, counterparty_name: party || null, variable_symbol: vs || null, external_ref: ref };
   }).filter((l) => l.statement_date && !isNaN(l.amount));
 }
 
@@ -2541,8 +2546,9 @@ function renderImportPreview(fmt, targetId = "impArea") {
 
 async function confirmBankImport() {
   const account = document.getElementById("impAccount").value || "221";
-  await api("POST", "/bank/import", { accounting_unit_id: STATE.unit.id, bank_account: account, lines: importParsedLines });
-  toast(`Naimportováno ${importParsedLines.length} pohybů.`);
+  const result = await api("POST", "/bank/import", { accounting_unit_id: STATE.unit.id, bank_account: account, lines: importParsedLines });
+  const skippedMsg = result.skipped ? `, přeskočeno ${result.skipped} duplicit (už v systému)` : "";
+  toast(`Naimportováno ${result.inserted.length} pohybů${skippedMsg}.`);
   closeModal();
   renderBank();
 }
