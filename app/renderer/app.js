@@ -639,14 +639,15 @@ async function bootstrap() {
 // Detekce "běžíme v Electronu" — navigator.userAgent nastavuje sám Chromium
 // uvnitř Electronu, funguje nezávisle na verzi nainstalovaného main.js/preload.js
 // (na rozdíl od window.desktopUpdater, které starší nainstalovaný shell nemusí
-// mít vůbec — přesně tohle způsobilo, že se doporučení stažení appky ukazovalo
-// i uvnitř samotné desktopové appky, viz oprava 2026-07-16).
+// mít vůbec — starší instalace appky mohly mít i zastaralý cache app.js přes
+// Service Worker, viz sw.js; než se appka na klientovi zaktualizuje přes
+// "Restart to update" banner, může userAgent detekce dočasně selhat).
 function isDesktopShell() {
   return /Electron/i.test(navigator.userAgent) || typeof window.desktopUpdater !== "undefined";
 }
 
-// Doporučení stáhnout desktop appku — jen ve webové verzi, ne při každém
-// přihlášení (localStorage flag, připomene se znovu až za 30 dní, ne otravně pořád).
+// Doporučení stáhnout desktop appku — jen ve webové verzi (v prohlížeči), ne
+// při každém přihlášení (localStorage flag, připomene se znovu až za 30 dní).
 function maybeShowDesktopRecommendationBanner() {
   if (isDesktopShell()) return; // už jsme v desktop appce
   const dismissedAt = Number(localStorage.getItem("desktopRecommendationDismissedAt") || 0);
@@ -3602,8 +3603,8 @@ document.addEventListener("submit", async (e) => {
       case "create-recurring": await handleCreateRecurring(e.target); break;
       case "save-priloha": await handleSavePriloha(e.target); break;
       case "edane-xml": await downloadEdaneXml(e.target, e.submitter?.value); break;
-      case "dismiss-desktop-banner": dismissDesktopBanner(); break;
       case "download-desktop": await downloadDesktopInstaller(id); break;
+      case "dismiss-desktop-banner": dismissDesktopBanner(); break;
     }
   } catch (err) {
     toast(err.message, "error");
