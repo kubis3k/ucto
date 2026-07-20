@@ -336,7 +336,12 @@ input[type="file"]::file-selector-button {
 }
 input[type="file"]::file-selector-button:hover { background: var(--brand-soft); }
 label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 6px; margin-top: 12px; font-weight: 500; }
-.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 2px 18px; }
+/* flex (ne grid) záměrně — u řádku, který nezaplní celou šířku, grid auto-placement
+   nechá políčka doleva se zbytkem prázdný (viz #settings, kde "Telefon/Logo/
+   Razítko/Podpis" nebo "Kód finančního úřadu..." řádky nevyplní všechny sloupce) —
+   flex + justify-content:center vycentruje i neúplný řádek. */
+.form-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px 18px; }
+.form-grid > * { flex: 1 1 210px; }
 .form-actions { margin-top: 20px; display: flex; gap: 10px; }
 .line-items-table input { min-width: 90px; }
 

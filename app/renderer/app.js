@@ -3144,14 +3144,14 @@ async function renderSettings() {
         <div><label>Logo${STATE.unit.logo_data_url ? " (nahrané — vyberte nový soubor pro nahrazení)" : ""}</label><input type="file" name="logo_file" accept="image/png,image/jpeg,image/svg+xml" /></div>
         <div><label>Razítko${STATE.unit.stamp_data_url ? " (nahrané)" : ""}</label><input type="file" name="stamp_file" accept="image/png,image/jpeg" /></div>
         <div><label>Podpis${STATE.unit.signature_data_url ? " (nahraný)" : ""}</label><input type="file" name="signature_file" accept="image/png,image/jpeg" /></div>
-        <div style="grid-column:1/-1"><p class="text-dim" style="margin:6px 0 0">Údaje pro elektronické podání DPH (kap. Výstupy → DPH)</p></div>
+        <div style="flex-basis:100%"><p class="text-dim" style="margin:6px 0 0">Údaje pro elektronické podání DPH (kap. Výstupy → DPH)</p></div>
         <div><label>Kód finančního úřadu</label><input type="text" name="ufo_code" value="${esc(STATE.unit.ufo_code || "")}" placeholder="np. 401" /></div>
         <div><label>Ulice (sídlo)</label><input type="text" name="fs_street" value="${esc(STATE.unit.fs_street || "")}" /></div>
         <div><label>Číslo popisné</label><input type="text" name="fs_house_number" value="${esc(STATE.unit.fs_house_number || "")}" /></div>
         <div><label>Číslo orientační</label><input type="text" name="fs_orientation_number" value="${esc(STATE.unit.fs_orientation_number || "")}" /></div>
         <div><label>Obec</label><input type="text" name="fs_city" value="${esc(STATE.unit.fs_city || "")}" /></div>
         <div><label>PSČ</label><input type="text" name="fs_zip" value="${esc(STATE.unit.fs_zip || "")}" /></div>
-        <div style="grid-column:1/-1"><button type="submit">Uložit</button></div>
+        <div style="flex-basis:100%"><button type="submit">Uložit</button></div>
       </form>
     </div>
     ${!isDesktopShell() ? `
