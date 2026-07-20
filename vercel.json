@@ -8,6 +8,7 @@
     { "source": "/app.js", "destination": "/app/renderer/app.js" },
     { "source": "/style.css", "destination": "/app/renderer/style.css" },
     { "source": "/sw.js", "destination": "/app/renderer/sw.js" },
+    { "source": "/assets/(.*)", "destination": "/app/renderer/assets/$1" },
     { "source": "/pay/(.*)", "destination": "/api/index" }
   ],
   "crons": [
