@@ -392,11 +392,20 @@ router.post("/inbound-mailbox", async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-// Sestaví párovací e-mailovou adresu z POSTMARK_INBOUND_ADDRESS (např.
-// "abc123@inbound.postmarkapp.com") vložením +token před "@" (Postmark
-// MailboxHash routing). Bez env proměnné vrací null — frontend zobrazí
-// informaci, že adresa čeká na doplnění nastavení serveru.
+// Sestaví párovací e-mailovou adresu. Dvě varianty:
+// 1) POSTMARK_INBOUND_DOMAIN (vlastní subdoména s MX na Postmark, "Inbound
+//    Domain Forwarding") -> "token@in.vasedomena.cz", BEZ "+" — některé
+//    bankovní formuláře pro upozornění na pohyby (ověřeno u RB, 2026-07-20)
+//    striktně odmítají "+" v e-mailu jako "neplatný formát", i když je to
+//    platný tvar adresy. Preferovaná varianta, pokud je nastavená.
+// 2) POSTMARK_INBOUND_ADDRESS (výchozí Postmark adresa typu
+//    "abc123@inbound.postmarkapp.com") -> vloží se +token před "@" (Postmark
+//    MailboxHash routing) — funguje, ale obsahuje "+", viz výše.
+// Bez obou proměnných vrací null — frontend zobrazí informaci, že adresa
+// čeká na doplnění nastavení serveru.
 function buildInboundAddress(token) {
+  const domain = process.env.POSTMARK_INBOUND_DOMAIN;
+  if (domain) return `${token}@${domain}`;
   const base = process.env.POSTMARK_INBOUND_ADDRESS;
   if (!base) return null;
   const at = base.indexOf("@");

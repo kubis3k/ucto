@@ -3194,7 +3194,7 @@ async function renderSettings() {
         <p class="text-dim" style="margin-top:0">Přidejte tuto adresu do upozornění vaší banky (příchozí platby) — systém pak automaticky zaznamená platby jako bankovní pohyb a zkusí je spárovat s fakturou.</p>
         ${mailbox.address
           ? `<input type="text" readonly value="${esc(mailbox.address)}" onclick="this.select()" style="max-width:420px" />`
-          : `<p style="color:var(--danger,#c00)">Párovací token je vytvořen (účet ${esc(mailbox.bank_account)}), ale server ještě nemá nastavenou proměnnou POSTMARK_INBOUND_ADDRESS — adresu doplní správce nasazení.</p>`}
+          : `<p style="color:var(--danger,#c00)">Párovací token je vytvořen (účet ${esc(mailbox.bank_account)}), ale server ještě nemá nastavenou proměnnou POSTMARK_INBOUND_DOMAIN nebo POSTMARK_INBOUND_ADDRESS — adresu doplní správce nasazení.</p>`}
       ` : `
         <p class="text-dim" style="margin-top:0">Vygenerujte párovací e-mailovou adresu a přidejte ji do upozornění vaší banky (příchozí platby) — systém pak automaticky zaznamená platby jako bankovní pohyb a zkusí je spárovat s fakturou. Funguje jen na webovém nasazení.</p>
         <form data-form="generate-bank-mailbox" class="form-grid" style="align-items:end">

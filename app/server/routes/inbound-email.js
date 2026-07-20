@@ -1,10 +1,21 @@
 // =====================================================================
-// inbound-email.js — Postmark Inbound webhook (routing: MailboxHash =
-// token přiřazený firmě přes bank_inbound_mailbox, ekvivalent Fakturoidí
-// "bank.X.Y@..." adresy). MUSÍ být mountnutý PŘED requireAuth (index.js)
-// — nemá uživatelskou session, autentizace vlastním HTTP Basic Auth vs
-// POSTMARK_INBOUND_TOKEN (stejný vzor jako CRON_SECRET v cron.js: bez env
-// proměnné VŽDY odmítni, nikdy tichý bypass).
+// inbound-email.js — Postmark Inbound webhook (routing: token přiřazený
+// firmě přes bank_inbound_mailbox, ekvivalent Fakturoidí "bank.X.Y@..."
+// adresy). MUSÍ být mountnutý PŘED requireAuth (index.js) — nemá uživatelskou
+// session, autentizace vlastním HTTP Basic Auth vs POSTMARK_INBOUND_TOKEN
+// (stejný vzor jako CRON_SECRET v cron.js: bez env proměnné VŽDY odmítni,
+// nikdy tichý bypass).
+//
+// Token se z Postmark payloadu čte DVĚMA způsoby (viz bank.js
+// buildInboundAddress — dvě schémata adresy):
+// 1) payload.MailboxHash — Postmark vlastní "+token" konvence na jejich
+//    doméně (*@inbound.postmarkapp.com).
+// 2) Když MailboxHash chybí (prázdný string, ne undefined — Postmark ho
+//    posílá i jako "") — token je celá lokální část adresy, na kterou email
+//    reálně přišel (OriginalRecipient), použité pro vlastní subdomain podle
+//    "Inbound Domain Forwarding" (POSTMARK_INBOUND_DOMAIN v bank.js) — bez
+//    "+", protože ho některé bankovní formuláře pro upozornění na pohyby
+//    odmítají jako "neplatný formát" (ověřeno u RB, 2026-07-20).
 // =====================================================================
 const express = require("express");
 const store = require("../db");
@@ -33,7 +44,8 @@ router.post("/bank-email", async (req, res) => {
   }
   try {
     const payload = req.body || {};
-    const mailboxHash = payload.MailboxHash;
+    const recipient = payload.OriginalRecipient || payload.To || "";
+    const mailboxHash = payload.MailboxHash || recipient.split("@")[0].trim();
     const mailbox = mailboxHash
       ? await store.get("SELECT * FROM bank_inbound_mailbox WHERE token = ?", [mailboxHash])
       : null;
