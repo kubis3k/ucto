@@ -3445,6 +3445,8 @@ document.addEventListener("click", async (e) => {
       case "restart-to-update": await restartToUpdate(); break;
       case "restart-desktop-update": window.desktopUpdater.restart(); break;
       case "toggle-balance-visibility": toggleBalanceVisibility(); break;
+      case "download-desktop": await downloadDesktopInstaller(id); break;
+      case "dismiss-desktop-banner": dismissDesktopBanner(); break;
       case "auth-tab": AUTH_TAB = e.target.closest("[data-tab]").dataset.tab; renderAuthScreen(); break;
       case "logout": e.preventDefault(); await handleLogout(); break;
       case "add-posting-line": addPostingLineRow(); break;
@@ -3612,8 +3614,6 @@ document.addEventListener("submit", async (e) => {
       case "create-recurring": await handleCreateRecurring(e.target); break;
       case "save-priloha": await handleSavePriloha(e.target); break;
       case "edane-xml": await downloadEdaneXml(e.target, e.submitter?.value); break;
-      case "download-desktop": await downloadDesktopInstaller(id); break;
-      case "dismiss-desktop-banner": dismissDesktopBanner(); break;
     }
   } catch (err) {
     toast(err.message, "error");
