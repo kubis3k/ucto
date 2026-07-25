@@ -673,6 +673,8 @@ odmítne** — nikdy se tiše nepovolí průchod.
 | `POSTMARK_INBOUND_DOMAIN` | Vlastní subdoména s MX na Postmark → adresa **bez `+`** (nutné, protože některé banky `+` v e-mailu odmítají — ověřeno u Raiffeisenbank). Doporučeno. |
 | `POSTMARK_INBOUND_ADDRESS` | Alternativa: výchozí Postmark adresa (obsahuje `+`). |
 | `GITHUB_RELEASES_TOKEN` | Read-only token pro stahování desktop instalátoru z privátního repa. |
+| `BLOB_READ_WRITE_TOKEN` | Objektové úložiště (Vercel Blob) — **trvalé přílohy dokladů a zálohy**. Na produkci povinné, viz 10.6. |
+| `BACKUP_RETENTION_DAYS` | Retence aplikačních záloh ve dnech (výchozí 90). |
 | `CRON_SECRET` | Ochrana cron endpointu. |
 
 ### 10.2 Nasazení webu
@@ -716,7 +718,45 @@ se **vůbec nezachytávají** — offline zápis prostě selže. Je to vědomé 
 offline fronta, žádná synchronizace, jediný zdroj pravdy je server. Uživatel vidí banner
 „Offline — zobrazena poslední stažená data, ukládání není možné."
 
-### 10.6 Lokální vývoj
+### 10.6 Zálohování (dvě vrstvy)
+
+Zálohování je **záměrně dvouvrstvé** — každá vrstva chrání proti jinému typu selhání.
+
+**Vrstva 1 — PITR / branching u poskytovatele databáze (nutno zapnout ručně).**
+Chrání proti havárii databáze. Nastavuje se **mimo kód**, v Neon dashboardu:
+*Project → Settings → Storage → History retention* (doporučeno minimálně 7 dní, na
+tarifu který to umožňuje ideálně 30). Tohle systém nemůže nastavit sám a bez toho
+neexistuje bod obnovy „stav před 10 minutami".
+
+**Vrstva 2 — aplikační záloha (v kódu, běží sama).**
+Chrání proti chybě v aplikaci nebo omylem smazaným datům, kde by PITR musel vracet
+celou databázi. Cron `GET /api/cron/backup` (denně 6:30, chráněno `CRON_SECRET`)
+projde **všechny tabulky z databázového katalogu** — ne zadrátovaný seznam, aby nová
+tabulka v záloze tiše nechyběla — a uloží JSON archiv do objektového úložiště pod
+prefix `backups/`. Archivy starší než `BACKUP_RETENTION_DAYS` (výchozí 90) se mažou.
+
+Bez `BLOB_READ_WRITE_TOKEN` záloha **hlasitě selže** (HTTP 503), místo aby tiše
+neproběhla — nenakonfigurované zálohování je nebezpečnější než žádné, protože se na
+něj spoléhá.
+
+**Obnova ze zálohy:**
+
+```bash
+DATABASE_URL=postgres://... node server/scripts/restore-backup.js zaloha.json --dry-run
+DATABASE_URL=postgres://... node server/scripts/restore-backup.js zaloha.json --force
+```
+
+`--dry-run` jen vypíše, co by se obnovilo. Bez `--force` skript odmítne psát do
+databáze, která už obsahuje data. Obnova probíhá v jedné transakci a **dočasně vypíná
+append-only triggery** — jinak by na nich legitimně spadla (nelze vložit zápis do už
+uzavřeného období). Není to obcházení § 33a: pravidlo chrání běžící systém před změnou
+historie, ne obnovu havarované databáze z vlastní zálohy. Fakt obnovy se zapisuje do
+audit logu už se zapnutými triggery, takže ho nelze zpětně smazat.
+
+Desktopová (SQLite) verze se obnovuje jednodušeji — zkopírováním souboru
+`ucetnictvi.sqlite` v `%APPDATA%\globaal-elevate-ucetnictvi`.
+
+### 10.7 Lokální vývoj
 
 ```bash
 cd app
@@ -903,6 +943,7 @@ Update ani delete **záměrně neexistují** (§ 33a ZoÚ).
 | Endpoint | Ochrana |
 |---|---|
 | `GET /api/cron/recurring` | `Bearer CRON_SECRET` |
+| `GET /api/cron/backup` | `Bearer CRON_SECRET` — denní záloha, viz 10.6 |
 | `POST /api/inbound/bank-email` | Basic Auth vs `POSTMARK_INBOUND_TOKEN` |
 | `POST /api/stripe/webhook` | Podpis Stripe (raw body, před `express.json()`) |
 | `GET /pay/:token` | Neuhádnutelný platební token |

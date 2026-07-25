@@ -22,24 +22,15 @@
 const fs = require("fs");
 const path = require("path");
 const store = require("../db");
+const blobClient = require("./blobClient");
 
-// Lazy require — @vercel/blob nemusí být nainstalované v každém prostředí
-// (např. desktop build, kde se přílohy ukládají lokálně). Bez blob tokenu
-// se modul vůbec nenačítá.
-let blobClientOverride = null;
-function getBlobClient() {
-  if (blobClientOverride) return blobClientOverride;
-  return require("@vercel/blob");
-}
-
-// Testovací seam — testy si podstrčí fake klienta, aby se dal ověřit
-// "přežije smazání lokálního disku" bez skutečného Vercel účtu.
+// Testovací seam je společný pro celý projekt — viz lib/blobClient.js.
 function __setBlobClientForTests(client) {
-  blobClientOverride = client;
+  blobClient.setForTests(client);
 }
 
 function isBlobConfigured() {
-  return !!(process.env.BLOB_READ_WRITE_TOKEN || blobClientOverride);
+  return blobClient.isConfigured();
 }
 
 function safeName(fileName) {
@@ -59,7 +50,7 @@ async function save({ unitId, documentId, fileName, mimeType, buffer }) {
   const stamped = `${Date.now()}_${safeName(fileName)}`;
 
   if (isBlobConfigured()) {
-    const { put } = getBlobClient();
+    const { put } = blobClient.get();
     const key = `attachments/${unitId}/${documentId}/${stamped}`;
     const result = await put(key, buffer, {
       access: "public",
@@ -67,7 +58,7 @@ async function save({ unitId, documentId, fileName, mimeType, buffer }) {
       // Klíč musí zůstat přesně takový, jaký si uložíme do DB — jinak
       // bychom po náhodné příponě Vercelu nedokázali soubor znovu najít.
       addRandomSuffix: false,
-      token: process.env.BLOB_READ_WRITE_TOKEN,
+      token: blobClient.token(),
     });
     return {
       storage_backend: "blob",
@@ -99,8 +90,8 @@ async function load(attachment) {
     // dohledá se v Blobu podle klíče.
     let url = attachment.storage_url;
     if (!url) {
-      const { head } = getBlobClient();
-      const meta = await head(attachment.file_path, { token: process.env.BLOB_READ_WRITE_TOKEN }).catch(() => null);
+      const { head } = blobClient.get();
+      const meta = await head(attachment.file_path, { token: blobClient.token() }).catch(() => null);
       url = meta && meta.url;
     }
     if (!url) throw Object.assign(new Error("Soubor přílohy nebyl v úložišti nalezen."), { status: 404 });

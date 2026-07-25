@@ -163,8 +163,19 @@ function getDb() {
   return db;
 }
 
+// Seznam uživatelských tabulek — katalogový dotaz je jediné místo, kde se
+// SQLite a Postgres nutně liší, proto je součástí adaptéru (business kód
+// zůstává backend-agnostický). Používá lib/backup.js, aby záloha nemusela mít
+// zadrátovaný seznam tabulek a nová tabulka v ní tiše nechyběla.
+async function listTables() {
+  const rows = await all(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+  );
+  return rows.map((r) => r.name);
+}
+
 function getUserDataDir() {
   return userDataDirPath;
 }
 
-module.exports = { init, persist, all, get, run, transaction, getDb, getUserDataDir };
+module.exports = { init, persist, all, get, run, transaction, getDb, getUserDataDir, listTables };

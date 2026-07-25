@@ -36,6 +36,14 @@ async function init() {
 // Vercel serverless nemá trvalý disk — použije se dočasný adresář (přežije
 // jen po dobu běhu jedné instance). Přílohy dokladů proto na webu prozatím
 // nejsou trvale perzistentní, viz komentář v schema-pg.sql u document_attachment.
+// Viz db-sqlite.js listTables() — stejné rozhraní, jiný katalog.
+async function listTables() {
+  const rows = await all(
+    "SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
+  );
+  return rows.map((r) => r.name);
+}
+
 function getUserDataDir() {
   return os.tmpdir();
 }
@@ -94,4 +102,4 @@ function getDb() {
   return pool;
 }
 
-module.exports = { init, persist, all, get, run, transaction, getDb, getUserDataDir };
+module.exports = { init, persist, all, get, run, transaction, getDb, getUserDataDir, listTables };
