@@ -82,6 +82,7 @@ interně, s těmito cíli:
 | OCR / sken faktury | `pdf-parse` (server, PDF) + Tesseract.js (prohlížeč, obrázky) |
 | E-mail | `nodemailer` (odesílání), vlastní parser (příjem bankovních notifikací) |
 | Platby | Stripe Checkout, QR platba ve standardu SPD |
+| Objektové úložiště | Vercel Blob (`@vercel/blob`) — přílohy dokladů a zálohy; bez tokenu fallback na lokální disk |
 | Kurzy | kurzovní lístek ČNB (denní, s cache v DB) |
 | Nasazení webu | Vercel serverless (`api/index.js`) + statické rewrites |
 | Testy | `node:test` (vestavěný v Node, žádná další závislost) |
@@ -100,7 +101,7 @@ module.exports = process.env.DATABASE_URL ? require("./db-pg") : require("./db-s
 ```
 
 Oba adaptéry vystavují **identické asynchronní rozhraní**
-(`init` / `all` / `get` / `run` / `transaction` / `persist` / `getDb` / `getUserDataDir`),
+(`init` / `all` / `get` / `run` / `transaction` / `persist` / `getDb` / `getUserDataDir` / `listTables`),
 takže žádná routa ani business logika neví, se kterým backendem mluví. Obchodní pravidla,
 výpočty a validace jsou tedy pro web i lokální vývoj **doslova stejný kód**.
 
@@ -121,13 +122,24 @@ app/
     seed.js                   Prvotní naplnění
     routes/                   22 souborů — API endpointy
     lib/                      21 souborů — business logika, výpočty, PDF, integrace
+    scripts/restore-backup.js Obnova databáze ze zálohy (viz 10.6)
   renderer/                   Frontend (app.js, style.css, index.html, sw.js)
-  test/                       19 automatizovaných testů
+  test/                       7 souborů, 49 automatizovaných testů
 db/                           Referenční PostgreSQL schéma z fáze 0-1
 brief/                        Původní zadání (.docx)
-vercel.json                   Rewrites + cron pro pravidelné faktury
+vercel.json                   Rewrites + crony (pravidelné faktury, denní záloha)
 .github/workflows/            CI build desktop instalátorů
+DOKUMENTACE.md                Tento dokument
+FIX_REPORT.md                 Report uzavření mezer ze sekcí 9 a 12 (25. 7. 2026)
+DPH_ROZHODNUTI.md             Otevřené daňové otázky pro účetní (větev fáze B)
 ```
+
+> **Fáze B (přeshraniční DPH)** není na `main`. Žije na větvi
+> `feature/preshranicni-dph` a přidává `lib/vatRegimes.js`,
+> `lib/vatSelfAssessment.js`, tabulku `vat_regime_config` a endpointy
+> `/api/vat/regimes`, `/api/vat/self-assessment/:id`,
+> `/api/vat/souhrnne-hlaseni`. Nenasazuje se, dokud účetní nepotvrdí
+> `DPH_ROZHODNUTI.md` — viz sekce 12.2.
 
 ---
 
@@ -233,9 +245,15 @@ navždy v deníku.
 | Trigger | Kdy | Hláška |
 |---|---|---|
 | `trg_document_no_delete` | jakýkoli DELETE na `document` | *Doklady nelze mazat (§ 11, § 33a ZoÚ) — pouze stornovat.* |
-| `trg_document_edit_guard` | UPDATE dokladu ve stavu `zauctovany`/`stornovany`, pokud se stav nemění | *Doklad je již zaúčtovaný nebo stornovaný — nelze upravit. Vytvořte opravný doklad.* |
+| `trg_document_edit_guard` | UPDATE dokladu ve stavu `schvaleny`/`zauctovany`/`stornovany`, pokud se stav nemění | *Doklad je již schválený, zaúčtovaný nebo stornovaný — nelze upravit. Vytvořte opravný doklad.* |
 
-Přechod `zauctovany → stornovany` trigger záměrně propustí (storno musí být možné).
+Přechody, které mění stav (`schvaleny → zauctovany`, `zauctovany → stornovany`), trigger
+záměrně propustí — schválení, zaúčtování a storno musí být možné. Blokuje se jen editace
+obsahu dokladu, který už prošel schválením.
+
+Stav `schvaleny` byl do triggeru doplněn 25. 7. 2026 (do té doby ho hlídala jen aplikační
+vrstva) — v obou variantách schématu s doslova stejnou hláškou, aby se chování desktopu
+a webu nerozešlo.
 
 ### 5.4 Uzamčení účetního období (§ 29–30)
 
@@ -259,8 +277,19 @@ zůstává auditní stopa, kdo a kdy měsíc odemkl. Odemknout smí pouze role `
 ### 5.6 Dvojpojistka v aplikační vrstvě
 
 Funkce `assertPeriodOpen()` a `assertMonthOpen()` kontrolují totéž ještě před zápisem.
-Jejich účel je **výhradně srozumitelná chybová hláška** — v kódu je výslovně uvedeno, že
-skutečnou, neobejitelnou pojistkou jsou databázové triggery.
+Mají dva účely:
+
+1. **Srozumitelná chybová hláška** místo databázové výjimky.
+2. **Pokrytí toho, na co triggery nedosáhnou.** Triggery reagují jen na vložení nového
+   záznamu (`BEFORE INSERT`), takže úpravu existujícího dokladu v uzamčeném měsíci by
+   nezastavily. Od 25. 7. 2026 běží aplikační kontrola u **všech** operací s účetním
+   dopadem, včetně těch nepřímých (párování platby, které generuje kurzový zápis; rychlé
+   zaúčtování pohybu; obě storno cesty; přecenění kurzů; inventurní soupis; editace
+   konceptu). U editace se kontroluje **původní i nové** datum, aby doklad nešlo
+   z uzamčeného měsíce „vyvést" přepsáním data.
+
+Neobejitelnou pojistkou zůstávají databázové triggery; aplikační vrstva je doplňuje tam,
+kam trigger nevidí.
 
 ---
 
@@ -372,7 +401,8 @@ export do CSV.
 **Nastavení** — údaje účetní jednotky (název, DIČ, kategorie mikro/malá/střední/velká,
 účetní režim, IBAN, adresa, kontakty), **branding faktur** (logo, razítko, podpis), údaje
 pro elektronické podání DPH (kód FÚ, strukturovaná adresa), **uživatelé a role**,
-**pozvánky kolegů/společníků**, generování párovací e-mailové adresy pro banku a (ve webové
+**pozvánky kolegů/společníků** (od 25. 7. 2026 **jediná** cesta, jak přidat uživatele —
+zakládání účtu bez hesla bylo zrušeno, viz 9.3.2), generování párovací e-mailové adresy pro banku a (ve webové
 verzi) **stažení desktopové aplikace pro Windows/Mac**.
 
 **Nápověda** — vysvětlení podvojného účetnictví, doporučený workflow, jak vytvořit zápis,
@@ -381,10 +411,16 @@ předkontace, opravy a storno, DPH, QR platba, import výpisu, výkazy, význam 
 
 ### Přihlášení
 
-Čtyři způsoby: **e-mail + heslo**, **nastavení nového hesla**, **registrace firmy**
-(včetně brandingu) a **BankID** — ověření jednatele proti seznamu statutárních orgánů
-z ARES. BankID má režim `mock` (testovací, vybere jednatele ze seznamu) a `live` (reálné
-OIDC). Přístup je **sdílený podle firmy** — kolegové ve stejné firmě vidí stejná data.
+Čtyři způsoby: **e-mail + heslo**, **nastavení nového hesla** (jen s platnou pozvánkou
+nebo z vlastní session), **registrace firmy** (včetně brandingu) a **BankID** — ověření
+jednatele proti seznamu statutárních orgánů z ARES.
+
+BankID má režimy `mock` (testovací, vybere jednatele ze seznamu) a `live` (reálné OIDC).
+Od 25. 7. 2026 je **fail-closed**: bez výslovně nastaveného `BANKID_MODE` se ověření
+odmítne a `mock` je dostupný jen v neprodukčním `NODE_ENV`. Dřív se bez konfigurace
+otevíral mock, což byl na produkci obchvat přihlášení.
+
+Přístup je **sdílený podle firmy** — kolegové ve stejné firmě vidí stejná data.
 
 ---
 
@@ -603,9 +639,13 @@ o cross-tenant únik (jen vlastní firma), ale do API odpovědi to nepatří.
 **C) Role neomezovaly prakticky nic. — OPRAVENO**
 Viz [model rolí](#93-model-rolí) výše.
 
-#### Zbývající — ponecháno vědomě
+#### Tehdy ponecháno, mezitím opraveno (25. 7. 2026)
 
-**D) Fail-open výchozí hodnota u BankID.**
+Následující dva nálezy zůstaly z revize 21. 7. otevřené a byly uzavřeny v opravném
+kole popsaném v [9.3.2](#932-uzavření-mezer-25-7-2026). Původní popis zůstává, protože
+vysvětluje, co přesně bylo špatně.
+
+**D) Fail-open výchozí hodnota u BankID. — OPRAVENO 25. 7. 2026**
 `BANKID_MODE` má v kódu default `"mock"`. V mock režimu endpoint `bankid/start` veřejně
 vrátí jména jednatelů podle IČO a `bankid/callback` pak vydá **admin session** komukoli, kdo
 zná IČO (veřejná informace) a jméno jednatele.
@@ -617,9 +657,14 @@ budoucím nasazení `BANKID_MODE` ztratilo, systém se tiše otevře. Bezpečně
 
 *Vedlejší zjištění:* produkce používá **sandbox** issuer `oidc.sandbox.bankid.cz`, tedy
 testovací prostředí BankID — reálné přihlášení přes BankID zatím nefunguje pro skutečné
-uživatele.
+uživatele. To **platí dál**: čeká se na produkční smlouvu s BankID. Nově se na to při
+startu v produkci upozorní v logu.
 
-**E) `POST /api/auth/set-password` je bez autentizace.**
+*Oprava:* `resolveBankidMode()` je fail-closed — bez výslovného `BANKID_MODE` se ověření
+odmítne, `mock` projde jen při neprodukčním `NODE_ENV`. Kontrola v `bankid/start` běží
+**před** dohledáním firmy, aby odpověď neprozradila, které IČO v systému existuje.
+
+**E) `POST /api/auth/set-password` je bez autentizace. — OPRAVENO 25. 7. 2026**
 Kdokoli, kdo zná e-mail uživatele, který ještě nemá nastavené heslo, si může nastavit vlastní
 a získat plnou session.
 
@@ -629,7 +674,11 @@ uzavřené (endpoint vrací 409). Ale endpoint `POST /api/users` (v Nastavení t
 zabíratelným. Pro přidávání kolegů je proto výrazně bezpečnější používat **pozvánky**
 (token v odkazu), ne „Přidat uživatele".
 
-#### Zámky období — nekonzistentní pokrytí
+*Oprava:* `set-password` vyžaduje platnou **jednorázovou** pozvánku na stejný e-mail nebo
+vlastní přihlášenou session. `POST /api/users` uživatele bez hesla vůbec nezakládá a
+odpovědí odkazuje na pozvánky; v UI je místo formuláře odkaz na pozvánkový tok.
+
+#### Zámky období — nekonzistentní pokrytí (OPRAVENO 25. 7. 2026)
 
 Kontrola uzavřeného období/měsíce v aplikační vrstvě běží jen u čtyř operací (vytvoření
 dokladu, zaúčtování dokladu, ruční zápis, odpis majetku). **Bez ní**, ale s účetními dopady,
@@ -639,6 +688,34 @@ endpointy, přecenění kurzů a generování inventurního soupisu.
 V praxi to zachytí databázové triggery, ale ty reagují jen na **vložení** nového záznamu
 (`BEFORE INSERT`), nikoli na úpravu — a nehlídají řádky (`posting_line`, `document_line`),
 jen hlavičky.
+
+*Oprava:* kontrola období i měsíce doplněna ke všem uvedeným operacím, včetně editace
+konceptu. Proč se `BEFORE UPDATE` guard na řádky vědomě nepřidal, viz [12.3](#123-technická-omezení).
+
+### 9.3.2 Uzavření mezer (25. 7. 2026)
+
+Druhé opravné kolo uzavřelo zbytek nálezů z revize 21. 7. a tři provozní mezery ze
+sekce 12. Každá oprava má vlastní regresní test; podrobný popis včetně zdůvodnění
+vědomých rozhodnutí je v `FIX_REPORT.md`.
+
+| Oprava | Co bylo špatně | Testy |
+|---|---|---|
+| **Perzistence příloh** | na Vercelu byl adresář příloh `os.tmpdir()`, takže přílohy zmizely se serverless instancí | 3 |
+| **Automatické zálohování** | neexistovala vlastní záloha; jedinou pojistkou byl poskytovatel databáze, u kterého navíc nebyla zapnutá | 6 |
+| **Zámky období a měsíce** | kontrola běžela jen u 4 operací, sedm dalších s účetním dopadem ji obcházelo | 11 |
+| **Zabrání účtu** | veřejný `set-password` + zakládání uživatelů bez hesla | 5 |
+| **BankID fail-closed** | bez `BANKID_MODE` se otevíral mock | 3 |
+
+Změny, které stojí za zmínku i mimo bezpečnostní kontext:
+
+- **`stornoPosting()` má povinný `unitId`** a bez něj hlasitě spadne. Tichý neomezený
+  dotaz by byl horší než výjimka.
+- **`trg_document_edit_guard` pokrývá i stav `schvaleny`** — v obou variantách schématu
+  s doslova stejnou chybovou hláškou.
+- **Storno v uzavřeném období je zakázané.** Oprava se dělá opravným dokladem
+  v otevřeném období, ne zpětným zásahem do uzavřené historie.
+- **Přílohy se ze systému nemažou** — jsou součástí průkaznosti účetnictví (§ 33a ZoÚ).
+  Nejvýš by šlo o soft-delete, ne o skutečné odstranění.
 
 ### 9.4 Veřejné a jinak chráněné endpointy
 
@@ -666,7 +743,7 @@ odmítne** — nikdy se tiše nepovolí průchod.
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string. Bez ní systém spadne na SQLite. |
 | `JWT_SECRET` | Podepisování přihlašovacích tokenů. |
-| `BANKID_MODE` | `mock` (výchozí) nebo `live`. |
+| `BANKID_MODE` | `mock` nebo `live`. **Bez této proměnné BankID ověření odmítne** (fail-closed); `mock` funguje jen při neprodukčním `NODE_ENV`. |
 | `BANKID_CLIENT_ID`, `BANKID_CLIENT_SECRET`, `BANKID_REDIRECT_URI`, `BANKID_ISSUER` | Reálné BankID OIDC. |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | Odesílání faktur e-mailem. |
 | `POSTMARK_INBOUND_TOKEN` | Heslo webhooku pro příjem bankovních notifikací. |
@@ -680,8 +757,14 @@ odmítne** — nikdy se tiše nepovolí průchod.
 ### 10.2 Nasazení webu
 
 Vercel. `vercel.json` řeší rewrites (`/api/*` → serverless funkce, `/` a `/login` →
-`index.html`, statické soubory, `/pay/*`) a **cron** `/api/cron/recurring` denně v 6:00
-pro generování pravidelných faktur. Žádný bundler, žádný build krok.
+`index.html`, statické soubory, `/assets/*`, `/pay/*`) a dva **crony**:
+`/api/cron/recurring` denně v 6:00 (pravidelné faktury) a `/api/cron/backup` denně
+v 6:30 (záloha, viz 10.6). Žádný bundler, žádný build krok.
+
+Při startu v produkci se do logu zapíše varování, pokud chybí `BLOB_READ_WRITE_TOKEN`
+nebo `CRON_SECRET`, případně pokud BankID míří na sandbox issuer — tyhle stavy se navenek
+neprojeví jako chyba, ale znamenají, že přílohy nejsou trvalé, záloha neběží nebo běží
+ověření proti testovacímu prostředí.
 
 ### 10.3 Desktopové instalátory
 
@@ -773,9 +856,15 @@ npm run dist:mac     # macOS instalátory
 
 ## 11. Testování
 
-**19 automatizovaných testů**, spouštěné vestavěným runnerem Node (`node:test`) — žádná
-další závislost. Každý test běží proti skutečnému serveru s vlastní izolovanou databází
-v temp adresáři.
+**49 automatizovaných testů v 7 souborech**, spouštěné vestavěným runnerem Node
+(`node:test`) — žádná další závislost. Každý test běží proti skutečnému serveru s vlastní
+izolovanou databází v temp adresáři.
+
+Testy se dělí na dvě skupiny podle účelu. **Invarianty** hlídají, že systém dělá to, co
+má (podvojnost, číselné řady, správnost storna). **Regresní testy** hlídají, že se
+konkrétní opravená chyba nevrátí — každá oprava z [9.3.1](#931-opravené-nálezy-z-revize-dokumentace-21-7-2026)
+a [9.3.2](#932-uzavření-mezer-25-7-2026) má vlastní test, který **před** opravou spadl.
+Testovat opravu, o které nevím, že bez ní test selže, je psaní testu naslepo.
 
 ### `accounting-invariants.test.js` — účetní invarianty
 
@@ -790,10 +879,49 @@ v temp adresáři.
 
 ### `security-idor.test.js` — izolace firem
 
-Sedm testů se dvěma samostatnými firmami: firma B nesmí načíst doklad ani kontakt firmy A,
-nesmí je stornovat, schválit, uzavřít cizí účetní období ani stáhnout cizí PDF. Poslední
-test ověřuje, že firma A ke svým vlastním datům pořád normálně přistupuje (ochrana proti
-regresi typu „zamkli jsme to všem").
+Devět testů se dvěma samostatnými firmami: firma B nesmí načíst doklad ani kontakt firmy A,
+nesmí je stornovat, schválit, uzavřít cizí účetní období, stáhnout cizí PDF ani stornovat
+cizí **účetní zápis** (ID v cestě URL globální přepisovací middleware nechrání — právě
+tam byla dohledaná mezera). Další test hlídá, že `GET /api/users` nevrací `password_hash`.
+Poslední ověřuje, že firma A ke svým vlastním datům pořád normálně přistupuje — ochrana
+proti regresi typu „zamkli jsme to všem".
+
+### `period-locks.test.js` — zámky období a měsíce (11 testů)
+
+Pro **každou** operaci s účetním dopadem zvlášť: párování platby (generuje kurzový zápis),
+rychlé zaúčtování bankovního pohybu, obě storno cesty, přecenění kurzů, inventurní soupis,
+editace konceptu. Plus regrese, že schválený doklad jde dál normálně zaúčtovat i stornovat —
+zpřísnění nesmí zablokovat běžnou práci.
+
+### `auth-hardening.test.js` — cesta k zabrání účtu (5 testů)
+
+Veřejné nastavení hesla je odmítnuto **a hash zůstane `null`** (nestačí ověřit HTTP kód,
+je potřeba ověřit, že se účet skutečně nezabral). Pozvánka na stejný e-mail projde a je
+jednorázová; pozvánka na cizí e-mail neprojde; `POST /api/users` vrací 400 a nic nezaloží;
+celý tok pozvánka → přijetí → přihlášení funguje.
+
+### `bankid-failclosed.test.js` — BankID (3 testy)
+
+Bez `BANKID_MODE` odmítnuto, `mock` v produkčním `NODE_ENV` odmítnuto, `mock`
+v neprodukčním prostředí funguje.
+
+### `attachments.test.js` — perzistence příloh (3 testy)
+
+Příloha je stažitelná i po „restartu" (jiný temp adresář — simuluje novou serverless
+instanci), firma B nestáhne přílohu firmy A, lokální režim funguje bez tokenu úložiště.
+
+### `backup.test.js` — zálohování (6 testů)
+
+Cron bez tajemství vrací 403; archiv obsahuje všechny tabulky **a všechny firmy**; retence
+maže podle `uploadedAt`, ne podle názvu souboru; bez nakonfigurovaného úložiště selže
+hlasitě (503).
+
+### Fáze B — `cross-border-vat.test.js` (11 testů, jen na větvi)
+
+Na `main` není. Testuje především **odmítání**: dokud účetní nepotvrdí konfiguraci režimu,
+samovyměření vrací 409, souhrnné hlášení se nevygeneruje a přiznání plnění nezahrne.
+Kdyby někdo do kódu doplnil výchozí účty nebo výchozí mapování na řádky přiznání, tyhle
+testy spadnou. Ověřeno na SQLite i proti reálné PostgreSQL instanci.
 
 ---
 
@@ -947,10 +1075,14 @@ Update ani delete **záměrně neexistují** (§ 33a ZoÚ).
 `GET`/`POST /ledger` · `GET /priznani` · `GET /kontrolni-hlaseni`
 `GET /priznani/xml` (DPHDP3) · `GET /kontrolni-hlaseni/xml` (DPHKH1)
 
+Na větvi fáze B navíc `GET`/`PUT /regimes/:regime` (konfigurace režimů, jen role
+`admin`/`ucetni`), `POST /self-assessment/:documentId` (samovyměření) a
+`GET /souhrnne-hlaseni` (+ `/xml`, DPHSHV). Na `main` neexistují — viz 12.2.
+
 ### Ostatní
 | Prefix | Endpointy |
 |---|---|
-| `/api` (misc) | `accounts`, `periods` (+ `:id/close`, `:id/lock-month`, `:id/unlock-month`, `:id/month-locks`), `units`, `users` |
+| `/api` (misc) | `accounts`, `periods` (+ `:id/close`, `:id/lock-month`, `:id/unlock-month`, `:id/month-locks`), `units`, `users`. Zápis vyžaduje roli `admin`/`ucetni`, odemčení měsíce a správa uživatelů jen `admin`. **`POST /users` uživatele nezakládá** — jedinou cestou je pozvánka (viz 9.3.2). |
 | `/api/contacts` | CRUD; mazání blokované, pokud je kontakt na dokladu |
 | `/api/projects` | CRUD; mazání blokované při napojených dokladech (409) |
 | `/api/assets` | `GET /`, `POST /`, `POST /:id/depreciate` |
@@ -974,6 +1106,12 @@ Update ani delete **záměrně neexistují** (§ 33a ZoÚ).
 | `GET /pay/:token` | Neuhádnutelný platební token |
 | `GET /api/version`, `GET /health` | Bez ochrany (jen identifikátor nasazení / stav) |
 
+Napříč celým `/api` platí dvě globální pojistky: přepisovací middleware nastaví
+`accounting_unit_id` ze session (klient nemůže tvrdit, že je jiná firma) a
+`blockReadOnlyRoles` pustí roli `ctenar` jen ke `GET`. **ID v cestě URL (`/:id`) první
+pojistka nechrání** — endpointy s ním musí dohledávat vždy s `unitId`, jinak vzniká přesně
+ta mezera, která byla nalezena u storna zápisu (9.3.1 A).
+
 ---
 
 ## Příloha B — Klíčové moduly business logiky
@@ -986,7 +1124,10 @@ Update ani delete **záměrně neexistují** (§ 33a ZoÚ).
 | `lib/chartOfAccountsSeed.js` | Účtová osnova + idempotentní doplňování |
 | `lib/cnbExchangeRate.js` | Kurz ČNB s cache (§ 24 odst. 6–7 ZoÚ) |
 | `lib/fxRevaluation.js` | Přecenění cizoměnových pohledávek/závazků k rozvahovému dni |
-| `lib/eDaneXml.js` | XML pro EPO / MOJE daně (DPHDP3, DPHKH1) |
+| `lib/eDaneXml.js` | XML pro EPO / MOJE daně (DPHDP3, DPHKH1; na větvi fáze B i DPHSHV) |
+| `lib/attachmentStore.js` | Přílohy dokladů — objektové úložiště, fallback na lokální disk |
+| `lib/backup.js` | Serializace všech tabulek do archivu + retence starých záloh |
+| `lib/blobClient.js` | Jediné místo, kde se načítá `@vercel/blob` (a jediný testovací seam) |
 | `lib/invoicePdf.js`, `lib/statementPdf.js` | PDF faktur, nabídek, závěrky, měsíční uzávěrky |
 | `lib/qrplatba.js` | QR platba ve standardu SPD 1.0 (ČBA) |
 | `lib/invoiceScan.js` | Extrakce textu a polí z naskenované faktury |
@@ -994,11 +1135,19 @@ Update ani delete **záměrně neexistují** (§ 33a ZoÚ).
 | `lib/bankEmailParser.js` | Parser notifikačních e-mailů českých bank |
 | `lib/recurring.js` | Generování pravidelných faktur včetně dohnání zmeškaných |
 | `lib/mailer.js` | Odesílání e-mailů (SMTP) |
-| `lib/auth.js` | Hesla (bcrypt), JWT session, `requireAuth` |
+| `lib/auth.js` | Hesla (bcrypt), JWT session, `requireAuth`, `requireRole`, `blockReadOnlyRoles` |
 | `lib/bankidOidc.js` | OIDC klient pro BankID |
 | `lib/companySetup.js` | Startup doplnění jednatelů a opravy dat firmy |
+| `scripts/restore-backup.js` | Obnova PostgreSQL databáze ze zálohy (`--dry-run` / `--force`) |
+
+Moduly fáze B (větev `feature/preshranicni-dph`, nenasazeno):
+
+| Modul | Odpovědnost |
+|---|---|
+| `lib/vatRegimes.js` | Katalog režimů plnění — **jen pojmenování situací**, žádné daňové důsledky |
+| `lib/vatSelfAssessment.js` | Samovyměření DPH s konfigurovatelnými účty; bez potvrzené konfigurace odmítne účtovat |
 
 ---
 
-*Dokumentace odpovídá stavu kódu k 21. 7. 2026 (commit `d9ffb5f`), ověřeno i proti běžícímu
-produkčnímu nasazení.*
+*Dokumentace odpovídá stavu kódu k 25. 7. 2026 (commit `a6d8c71` na `main`, fáze B
+`1f4baf3` na `feature/preshranicni-dph`), ověřeno proti běžícímu produkčnímu nasazení.*
