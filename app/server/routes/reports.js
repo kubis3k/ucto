@@ -1,7 +1,7 @@
 const express = require("express");
 const store = require("../db");
 const reports = require("../lib/reports");
-const { writeAuditLog } = require("../lib/core");
+const { writeAuditLog, assertMonthOpen } = require("../lib/core");
 const { buildStatementPdf } = require("../lib/statementPdf");
 const { preceniOtevrenePohledavkyZavazky } = require("../lib/fxRevaluation");
 const router = express.Router();
@@ -233,6 +233,11 @@ router.post("/precenit-kurzove", async (req, res) => {
   const { asOf, created_by } = req.body;
   if (!asOf) return res.status(400).json({ error: "Chybí rozvahový den (asOf)." });
   try {
+    // FIX (A3): přecenění generuje účetní zápisy k rozvahovému dni, takže
+    // musí respektovat zámek měsíce. Uzavřenost období řeší per-doklad
+    // lib/fxRevaluation.js (přeceňuje jen otevřené pohledávky/závazky) plus
+    // DB trigger trg_posting_period_lock, tady se hlídá datum přecenění.
+    await assertMonthOpen(unitId, asOf);
     const result = await store.transaction(() => preceniOtevrenePohledavkyZavazky(unitId, asOf, created_by || req.user.id));
     store.persist();
     res.json({ rozvahovy_den: asOf, vysledky: result });

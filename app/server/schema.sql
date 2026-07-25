@@ -650,12 +650,14 @@ BEGIN
     SELECT RAISE(ABORT, 'Audit log je append-only a nelze jej smazat.');
 END;
 
--- Doklad lze upravit jen v konceptu; po schválení/zaúčtování/stornu nelze editovat ani mazat
+-- Doklad lze upravit jen v konceptu; po schválení/zaúčtování/stornu nelze editovat
+-- ani mazat. Stav 'schvaleny' přidán 2026-07-21 (A3) — komentář to tvrdil,
+-- ale trigger ho nekontroloval, takže schválený doklad šlo přepsat.
 CREATE TRIGGER IF NOT EXISTS trg_document_edit_guard
 BEFORE UPDATE ON document
-WHEN OLD.status IN ('zauctovany','stornovany') AND NEW.status = OLD.status
+WHEN OLD.status IN ('schvaleny','zauctovany','stornovany') AND NEW.status = OLD.status
 BEGIN
-    SELECT RAISE(ABORT, 'Doklad je již zaúčtovaný nebo stornovaný — nelze upravit. Vytvořte opravný doklad.');
+    SELECT RAISE(ABORT, 'Doklad je již schválený, zaúčtovaný nebo stornovaný — nelze upravit. Vytvořte opravný doklad.');
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_document_no_delete

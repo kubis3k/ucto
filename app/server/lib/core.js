@@ -97,12 +97,24 @@ async function stornoPosting(postingId, reason, userId, unitId) {
   );
   if (!original) throw new Error("Účetní zápis nenalezen.");
 
+  // FIX (A3, 2026-07-21): zámek období/měsíce se kontroluje i u storna, a to
+  // tady v core — pokrývá tím obě cesty (postings.js /:id/storno i
+  // documents.js /:id/storno) najednou. Rozhodnutí: storno do uzavřeného
+  // období/uzamčeného měsíce je ZAKÁZANÉ, bez výjimky. Uzavřené období je
+  // uzavřené (§ 29-30 ZoÚ) a oprava se má zaúčtovat do aktuálního otevřeného
+  // období opravným dokladem, ne zpětným zásahem do uzavřené historie.
+  // (DB trigger trg_posting_period_lock by INSERT stejně odmítl — tohle jen
+  // dává srozumitelnou hlášku a hlídá i uzamčený měsíc u data storna.)
+  const stornoDate = new Date().toISOString().slice(0, 10);
+  await assertPeriodOpen(original.period_id);
+  await assertMonthOpen(unitId, stornoDate);
+
   const postingNumber = await nextPostingNumber(original.accounting_unit_id);
   await store.run(
     `INSERT INTO posting (accounting_unit_id, period_id, posting_number, document_id, posting_date, description, storno_of_posting_id, created_by)
      VALUES (?,?,?,?,?,?,?,?)`,
     [original.accounting_unit_id, original.period_id, postingNumber, null,
-     new Date().toISOString().slice(0, 10), "STORNO: " + reason, postingId, userId]
+     stornoDate, "STORNO: " + reason, postingId, userId]
   );
   const newPostingId = (await store.get("SELECT last_insert_rowid() AS id")).id;
 

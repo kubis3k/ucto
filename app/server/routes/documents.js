@@ -133,6 +133,17 @@ router.put("/:id", async (req, res) => {
     if (!existing) return res.status(404).json({ error: "Doklad nenalezen" });
     if (existing.status !== "koncept") return res.status(400).json({ error: "Upravit lze jen doklad ve stavu koncept." });
 
+    // FIX (A3): editace dokladu (i ve stavu koncept) nesmí projít, pokud jeho
+    // datum spadá do uzavřeného období nebo uzamčeného měsíce — doklad mohl
+    // vzniknout před uzavřením a zůstat konceptem. Dřív PUT nekontroloval nic.
+    // Kontroluje se PŮVODNÍ i NOVÉ datum, ať nejde doklad z uzamčeného měsíce
+    // "vyvést" přepsáním data ani naopak vložit do uzamčeného měsíce.
+    await assertPeriodOpen(existing.period_id);
+    await assertMonthOpen(req.user.accountingUnitId, existing.issue_date);
+    if (issue_date && issue_date !== existing.issue_date) {
+      await assertMonthOpen(req.user.accountingUnitId, issue_date);
+    }
+
     const doc = await store.transaction(async () => {
       const newIssueDate = issue_date ?? existing.issue_date;
       const newCurrency = currency ?? existing.currency ?? "CZK";
@@ -243,6 +254,14 @@ router.post("/:id/storno", async (req, res) => {
     const before = await store.get("SELECT * FROM document WHERE id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
     if (!before) return res.status(404).json({ error: "Doklad nenalezen" });
     if (before.status === "stornovany") return res.status(400).json({ error: "Doklad je již stornovaný." });
+
+    // FIX (A3): zámek se musí kontrolovat i tady, ne jen ve stornoPosting.
+    // U NEZAÚČTOVANÉHO dokladu (koncept) žádné účetní zápisy neexistují, takže
+    // by se do stornoPosting vůbec nedostalo a storno dokladu v uzavřeném
+    // období by tichem prošlo. Rozhodnutí A3 je zakázat zápis do uzavřeného
+    // období/uzamčeného měsíce bez ohledu na cestu.
+    await assertPeriodOpen(before.period_id);
+    await assertMonthOpen(req.user.accountingUnitId, before.issue_date);
 
     await store.transaction(async () => {
       // FIX P1 (critic 2026-07-09, agent-memory/critic/document_storno_ghost_posting.md):

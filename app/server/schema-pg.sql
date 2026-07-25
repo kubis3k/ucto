@@ -622,8 +622,8 @@ CREATE TRIGGER trg_audit_log_no_delete BEFORE DELETE ON audit_log
 -- Doklad lze upravit jen v konceptu; po schválení/zaúčtování/stornu nelze editovat ani mazat
 CREATE OR REPLACE FUNCTION trg_fn_document_edit_guard() RETURNS TRIGGER AS $$
 BEGIN
-    IF OLD.status IN ('zauctovany','stornovany') AND NEW.status = OLD.status THEN
-        RAISE EXCEPTION 'Doklad je již zaúčtovaný nebo stornovaný — nelze upravit. Vytvořte opravný doklad.';
+    IF OLD.status IN ('schvaleny','zauctovany','stornovany') AND NEW.status = OLD.status THEN
+        RAISE EXCEPTION 'Doklad je již schválený, zaúčtovaný nebo stornovaný — nelze upravit. Vytvořte opravný doklad.';
     END IF;
     RETURN NEW;
 END;

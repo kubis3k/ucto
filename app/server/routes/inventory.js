@@ -1,5 +1,6 @@
 const express = require("express");
 const store = require("../db");
+const { assertPeriodOpen, assertMonthOpen } = require("../lib/core");
 const { writeAuditLog } = require("../lib/core");
 const { accountNaturalBalance } = require("../lib/reports");
 const router = express.Router();
@@ -17,6 +18,12 @@ router.post("/generate", async (req, res) => {
   const { period_id, as_of_date, created_by, note } = req.body;
   const accounting_unit_id = req.user.accountingUnitId;
   try {
+    // FIX (A3): inventurní soupis se pořizuje k rozvahovému dni otevřeného
+    // období (§ 29-30 ZoÚ) — do uzavřeného období ani uzamčeného měsíce už
+    // nový soupis nepatří. Dřív tady kontrola chyběla.
+    await assertPeriodOpen(period_id);
+    await assertMonthOpen(accounting_unit_id, as_of_date);
+
     const result = await store.transaction(async () => {
       await store.run(
         `INSERT INTO inventory_check (accounting_unit_id, period_id, as_of_date, created_by, note) VALUES (?,?,?,?,?)`,

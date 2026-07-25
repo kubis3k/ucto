@@ -1,8 +1,9 @@
 const express = require("express");
 const crypto = require("crypto");
 const store = require("../db");
-const { nextPostingNumber, writeAuditLog } = require("../lib/core");
+const { nextPostingNumber, writeAuditLog, assertPeriodOpen, assertMonthOpen } = require("../lib/core");
 const { createBankStatementLine } = require("../lib/bankMovements");
+const { resolvePeriodForDate } = require("../lib/recurring");
 const { getRate } = require("../lib/cnbExchangeRate");
 const router = express.Router();
 
@@ -232,6 +233,12 @@ router.post("/:id/match", async (req, res) => {
     }
     const fullyPaid = expected - newTotal <= overshootTolerance;
 
+    // FIX (A3): párování cizoměnového dokladu generuje účetní zápisy (kurzový
+    // rozdíl, marže banky), takže musí respektovat zámek období i měsíce —
+    // dřív tady kontrola chyběla úplně.
+    await assertPeriodOpen(doc.period_id);
+    await assertMonthOpen(unitId, line.statement_date);
+
     const result = await store.transaction(async () => {
       await store.run("UPDATE bank_statement_line SET matched_document_id = ? WHERE id = ? AND accounting_unit_id = ?", [document_id, req.params.id, unitId]);
 
@@ -328,17 +335,24 @@ router.post("/:id/quick-post", async (req, res) => {
       const line = await store.get("SELECT * FROM bank_statement_line WHERE id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
       if (!line) throw new Error("Řádek výpisu nenalezen.");
       if (line.matched_document_id || line.posting_id) throw new Error("Pohyb je již zaúčtovaný.");
+      // FIX (A3): quick-post vytváří účetní zápis, takže platí zámek období
+      // i měsíce podle DATA POHYBU. Dřív se kontrolovalo jen "existuje nějaké
+      // otevřené období", což uzamčený měsíc vůbec neřešilo.
 
       const bankAccount = await store.get(
         "SELECT id FROM chart_of_accounts WHERE accounting_unit_id = ? AND account_number = ?",
         [line.accounting_unit_id, line.bank_account]
       );
       if (!bankAccount) throw new Error(`Účet ${line.bank_account} nenalezen v účtovém rozvrhu.`);
-      const period = await store.get(
-        "SELECT id FROM accounting_period WHERE accounting_unit_id = ? AND status = 'otevrene' ORDER BY start_date DESC LIMIT 1",
-        [line.accounting_unit_id]
-      );
-      if (!period) throw new Error("Není otevřené účetní období.");
+      // FIX (A3): dřív se bralo "jakékoli otevřené období" (nejnovější podle
+      // start_date), ale účtovalo se DATEM POHYBU — zápis tak mohl spadnout do
+      // období, do kterého jeho datum vůbec nepatří (pohyb z 3/2026 do období
+      // 2027). Období se teď hledá podle data pohybu a musí být otevřené;
+      // navíc platí zámek měsíce.
+      const period = await resolvePeriodForDate(line.accounting_unit_id, line.statement_date);
+      if (!period) throw new Error(`Pro datum ${line.statement_date} neexistuje účetní období — nejprve ho otevřete.`);
+      await assertPeriodOpen(period.id);
+      await assertMonthOpen(line.accounting_unit_id, line.statement_date);
 
       const amt = Math.abs(line.amount);
       const bankSide = line.amount >= 0 ? "MD" : "D";
