@@ -2,7 +2,7 @@ const express = require("express");
 const crypto = require("crypto");
 const store = require("../db");
 const { insertAccounts } = require("../lib/chartOfAccountsSeed");
-const { hashPassword, verifyPassword, signSession, signState, verifyState, requireAuth } = require("../lib/auth");
+const { hashPassword, verifyPassword, signSession, signState, verifyState, verifySessionToken, requireAuth } = require("../lib/auth");
 const bankidOidc = require("../lib/bankidOidc");
 const router = express.Router();
 
@@ -62,19 +62,55 @@ router.post("/login", async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-// POST /api/auth/set-password — "aktivace" existujícího uživatele bez hesla
-// (přechod appek, kde uživatelé byli dřív jen jméno/e-mail bez přihlašování —
-// typicky ten seedovaný "Luigi" účet). Funguje jen jednou, dokud heslo není nastaveno.
+// POST /api/auth/set-password — nastavení hesla existujícímu účtu.
+//
+// FIX (A4, 2026-07-21): endpoint byl VEŘEJNÝ a stačilo znát e-mail uživatele,
+// který ještě heslo neměl — kdokoli si tak mohl takový účet zabrat a získat
+// plnou session. Nově vyžaduje jedno ze dvou:
+//   a) `token` platné nepoužité pozvánky vystavené na TENTÝŽ e-mail
+//      (cesta pro účty vzniklé před zavedením hesel — admin vystaví pozvánku),
+//   b) přihlášenou session téhož uživatele (změna vlastního hesla).
+// Pozvánka se použitím spotřebuje (used_at), takže je jednorázová.
 router.post("/set-password", async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, token } = req.body;
   if (!email || !password) return res.status(400).json({ error: "Zadejte e-mail a heslo." });
   if (password.length < 8) return res.status(400).json({ error: "Heslo musí mít alespoň 8 znaků." });
   try {
     const user = await store.get("SELECT * FROM app_user WHERE email = ? AND active = 1", [email]);
     if (!user) return res.status(404).json({ error: "Uživatel s tímto e-mailem nenalezen." });
-    if (user.password_hash) return res.status(409).json({ error: "Tento účet už má heslo nastaveno — použijte přihlášení." });
+
+    // Autorizace: pozvánka na stejný e-mail, nebo vlastní platná session.
+    let invite = null;
+    let viaSession = false;
+    if (token) {
+      invite = await store.get(
+        "SELECT * FROM company_invite WHERE token = ? AND used_at IS NULL AND email = ?",
+        [token, email]
+      );
+      if (!invite) return res.status(403).json({ error: "Pozvánka nenalezena, už byla použita, nebo je na jiný e-mail." });
+    } else {
+      const header = req.headers.authorization || "";
+      const bearer = header.startsWith("Bearer ") ? header.slice(7) : null;
+      const session = bearer ? verifySessionToken(bearer) : null;
+      if (!session || session.userId !== user.id) {
+        return res.status(403).json({
+          error: "Heslo lze nastavit jen přes pozvánku od administrátora, nebo po přihlášení (změna vlastního hesla).",
+        });
+      }
+      viaSession = true;
+    }
+
+    // Bez pozvánky (tedy jen s vlastní session) nejde přepsat heslo, které
+    // už existuje, cizí cestou — vlastní změna hesla je ale v pořádku.
+    if (user.password_hash && !viaSession && !invite) {
+      return res.status(409).json({ error: "Tento účet už má heslo nastaveno — použijte přihlášení." });
+    }
+
     const passwordHash = await hashPassword(password);
-    await store.run("UPDATE app_user SET password_hash = ? WHERE id = ?", [passwordHash, user.id]);
+    await store.transaction(async () => {
+      await store.run("UPDATE app_user SET password_hash = ? WHERE id = ?", [passwordHash, user.id]);
+      if (invite) await store.run("UPDATE company_invite SET used_at = datetime('now') WHERE id = ?", [invite.id]);
+    });
     store.persist();
     const updated = await store.get("SELECT * FROM app_user WHERE id = ?", [user.id]);
     res.json({ user: publicUser(updated), token: signSession(updated) });
@@ -140,7 +176,7 @@ router.post("/accept-invite", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------
-// BankID ověření jednatele — feature-flag BANKID_MODE=mock|live (env).
+// BankID ověření jednatele — feature-flag BANKID_MODE=live|mock (env), fail-closed.
 // V "mock" režimu se místo reálného OAuth přesměrování vrátí přímo
 // seznam jednatelů firmy — frontend nabídne jejich výběr. V "live" režimu
 // (BANKID_CLIENT_ID/SECRET/REDIRECT_URI nastavené) se přesměruje na
@@ -148,7 +184,29 @@ router.post("/accept-invite", async (req, res) => {
 // níže (ta se mountuje na kořenovou cestu "/", protože přesně tak byl u
 // BankID zaregistrovaný redirect_uri).
 // ---------------------------------------------------------------------
-const BANKID_MODE = process.env.BANKID_MODE || "mock";
+// FIX (A5, 2026-07-21): FAIL-CLOSED. Dřív byl default "mock", což znamenalo,
+// že bez nastavené proměnné se BankID tichem přepnulo do režimu, ve kterém
+// /bankid/start veřejně vrátí jména jednatelů podle IČO (veřejná informace)
+// a /bankid/callback pak vydá ADMIN session komukoli, kdo to jméno zopakuje.
+// Produkce to měla správně nastavené na "live", ale bezpečnost celého
+// přihlašování tak visela na jedné env proměnné — kdyby se při budoucím
+// nasazení ztratila, systém by se tiše otevřel.
+//
+// Nově: režim se NEODHADUJE. Bez explicitního BANKID_MODE se BankID odmítne
+// (501). Mock je navíc povolený jen mimo produkci — v produkčním NODE_ENV
+// je zakázaný i při výslovném BANKID_MODE=mock.
+function resolveBankidMode() {
+  const configured = process.env.BANKID_MODE;
+  if (!configured) return { mode: null, reason: "BankID není nakonfigurováno — chybí proměnná BANKID_MODE (live|mock)." };
+  if (configured === "live") return { mode: "live" };
+  if (configured === "mock") {
+    if (process.env.NODE_ENV === "production") {
+      return { mode: null, reason: "BankID v režimu mock je v produkci zakázán — nastavte BANKID_MODE=live." };
+    }
+    return { mode: "mock" };
+  }
+  return { mode: null, reason: `Neznámý BANKID_MODE '${configured}' — povolené hodnoty jsou live nebo mock.` };
+}
 
 // Sdílená logika ověření jména jednatele + vytvoření/aktualizace uživatele —
 // používá jak mock JSON callback, tak reálný OIDC redirect callback.
@@ -181,11 +239,16 @@ async function verifyAndUpsertBankidUser({ accounting_unit_id, full_name, email 
 
 // POST /api/auth/bankid/start — { ico }
 router.post("/bankid/start", async (req, res) => {
+  // Režim se řeší PŘED dohledáním firmy — jinak by odpověď 404/200 prozradila,
+  // které IČO je v systému, i když je BankID vypnuté.
+  const { mode, reason } = resolveBankidMode();
+  if (!mode) return res.status(501).json({ error: reason });
+
   const { ico } = req.body;
   const unit = await store.get("SELECT id, name, ico FROM accounting_unit WHERE ico = ?", [ico]);
   if (!unit) return res.status(404).json({ error: "Firma s tímto IČO není v systému zaregistrována." });
 
-  if (BANKID_MODE === "live") {
+  if (mode === "live") {
     if (!process.env.BANKID_CLIENT_ID || !process.env.BANKID_REDIRECT_URI) {
       return res.status(501).json({ error: "BankID (live) není nakonfigurováno — chybí BANKID_CLIENT_ID/BANKID_REDIRECT_URI." });
     }
@@ -203,7 +266,14 @@ router.post("/bankid/start", async (req, res) => {
 });
 
 // POST /api/auth/bankid/callback (mock) — { accounting_unit_id, full_name, email? }
+// Tohle je čistě mock cesta (živý flow končí v /bankid/token-verify), takže
+// musí být zavřená všude, kde mock není výslovně povolený — jinak by stačilo
+// znát IČO a jméno jednatele k získání admin session.
 router.post("/bankid/callback", async (req, res) => {
+  const { mode, reason } = resolveBankidMode();
+  if (mode !== "mock") {
+    return res.status(501).json({ error: reason || "Mock BankID není povolený — použijte živé přihlášení." });
+  }
   try {
     const user = await verifyAndUpsertBankidUser(req.body);
     res.json({ user: publicUser(user), token: signSession(user) });
@@ -215,6 +285,8 @@ router.post("/bankid/callback", async (req, res) => {
 
 // POST /api/auth/bankid/token-verify — implicit flow: frontend předá access_token z hash fragmentu
 router.post("/bankid/token-verify", async (req, res) => {
+  const { mode, reason } = resolveBankidMode();
+  if (mode !== "live") return res.status(501).json({ error: reason || "Živé BankID není nakonfigurováno." });
   const { access_token, state } = req.body;
   if (!access_token) return res.status(400).json({ error: "Chybí access_token." });
   try {

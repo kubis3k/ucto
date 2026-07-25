@@ -272,9 +272,10 @@ function renderAuthTabBody() {
     `;
   } else if (AUTH_TAB === "set-password") {
     body.innerHTML = `
-      <p class="auth-hint">Pro účty vytvořené před zavedením přihlašování (např. původní uživatel "Luigi") — nastavte si heslo poprvé podle e-mailu, na který byl účet založen.</p>
+      <p class="auth-hint">Pro účty vytvořené před zavedením přihlašování. Nastavení hesla vyžaduje <strong>pozvánkový kód od administrátora</strong> — bez něj by účet mohl zabrat kdokoli, kdo zná e-mail. Kód získáte od jednatele (Nastavení → Pozvat kolegu).</p>
       <form data-form="auth-set-password">
         <label>E-mail</label><input type="email" name="email" autocomplete="email" required />
+        <label>Pozvánkový kód</label><input type="text" name="token" autocomplete="off" required placeholder="kód z odkazu s pozvánkou" />
         <label>Nové heslo (min. 8 znaků)</label>${passwordField("password", 'autocomplete="new-password" minlength="8" required')}
         <div class="form-actions"><button type="submit">Nastavit heslo a přihlásit</button></div>
       </form>
@@ -3197,13 +3198,7 @@ async function renderSettings() {
         <thead><tr><th>Jméno</th><th>E-mail</th><th>Role</th><th>Aktivní</th></tr></thead>
         <tbody>${users.map((u) => `<tr><td>${esc(u.full_name)}</td><td>${esc(u.email)}</td><td>${esc(u.role)}</td><td>${u.active ? "ano" : "ne"}</td></tr>`).join("")}</tbody>
       </table></div>
-      <form data-form="add-user" class="form-grid" style="margin-top:14px;align-items:end">
-        <div><label>Jméno</label><input type="text" name="full_name" required /></div>
-        <div><label>E-mail</label><input type="email" name="email" required /></div>
-        <div><label>Role</label><select name="role"><option value="zadavatel">Zadavatel</option><option value="schvalovatel">Schvalovatel</option><option value="ucetni">Účetní</option><option value="ctenar">Čtenář</option><option value="admin">Admin</option></select></div>
-        <div><button type="submit">Přidat</button></div>
-      </form>
-      <p class="text-dim" style="font-size:11.5px;margin-top:8px">Takto přidaný uživatel se poprvé přihlásí přes "Nastavit heslo" na přihlašovací obrazovce. Pro sdílený přístup kolegy raději použijte pozvánku níže.</p>
+      <p class="text-dim" style="font-size:12px;margin-top:12px">Nového kolegu přidáte <strong>pozvánkou</strong> (panel níže) — dostane odkaz, kterým si sám nastaví heslo. Dřívější přímé „Přidat uživatele" zakládalo účet bez hesla, který si mohl zabrat kdokoli se znalostí e-mailu, proto bylo zrušeno.</p>
     </div>
     <div class="panel">
       <h2>Pozvat kolegu / společníka (sdílený přístup k firmě)</h2>
@@ -3264,15 +3259,6 @@ async function handleUpdateUnit(form) {
   const units = await api("GET", "/units");
   STATE.unit = units.find((u) => u.id === STATE.unit.id);
   toast("Nastavení bylo uloženo.");
-  renderSettings();
-}
-
-async function handleAddUser(form) {
-  const fd = new FormData(form);
-  const body = Object.fromEntries(fd.entries());
-  body.accounting_unit_id = STATE.unit.id;
-  await api("POST", "/users", body);
-  toast("Uživatel byl přidán.");
   renderSettings();
 }
 
@@ -3623,7 +3609,6 @@ document.addEventListener("submit", async (e) => {
       case "create-inventory": await handleCreateInventory(e.target); break;
       case "toggle-vat": await handleToggleVat(e.target); break;
       case "update-unit": await handleUpdateUnit(e.target); break;
-      case "add-user": await handleAddUser(e.target); break;
       case "upload-attachment": await handleUploadAttachment(e.target); break;
       case "send-invoice-email": await handleSendInvoiceEmail(e.target); break;
       case "auth-login": await handleAuthLogin(e.target); break;

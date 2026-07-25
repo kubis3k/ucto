@@ -102,6 +102,19 @@ function blockReadOnlyRoles(req, res, next) {
   next();
 }
 
+// Ověří přihlašovací token mimo middleware a vrátí payload, nebo null.
+// Používá routes/auth.js set-password, který běží PŘED requireAuth (nemá
+// req.user), ale potřebuje poznat, jestli jde o vlastní změnu hesla.
+function verifySessionToken(token) {
+  try {
+    const payload = jwt.verify(token, getJwtSecret());
+    if (payload.typ === "bankid_state") return null; // ne přihlašovací token
+    return payload;
+  } catch (err) {
+    return null;
+  }
+}
+
 // "state" pro OIDC (BankID) redirect flow — místo server-side session úložiště
 // (nevhodné pro serverless) se do state zakóduje podepsaný JWT s krátkou
 // platností nesoucí accounting_unit_id, ke kterému se přihlašování vztahuje.
@@ -116,4 +129,4 @@ function verifyState(token) {
   return payload;
 }
 
-module.exports = { hashPassword, verifyPassword, signSession, signState, verifyState, requireAuth, requireRole, blockReadOnlyRoles };
+module.exports = { hashPassword, verifyPassword, signSession, signState, verifyState, verifySessionToken, requireAuth, requireRole, blockReadOnlyRoles };

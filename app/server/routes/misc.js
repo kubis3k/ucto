@@ -196,17 +196,21 @@ router.get("/users", async (req, res) => {
 });
 
 // POST /api/users — přidání uživatele s rolí (kap. 5.10 brief — zadavatel/schvalovatel)
+// POST /api/users — ZRUŠENO (A4, 2026-07-21).
+//
+// Endpoint zakládal uživatele BEZ HESLA. Takový účet si pak mohl zabrat kdokoli,
+// kdo znal jeho e-mail, přes tehdy veřejný /api/auth/set-password — přidání
+// kolegy tedy vyrábělo volně obsaditelný účet. Jediná podporovaná cesta je
+// pozvánka: admin vystaví /api/auth/invite a kolega si přes odkaz
+// (/api/auth/accept-invite) sám nastaví heslo. Účet tak nikdy neexistuje
+// ve stavu "bez hesla".
+//
+// Routa zůstává (místo smazání), aby starší klient dostal srozumitelné
+// vysvětlení, ne 404.
 router.post("/users", requireRole("admin"), async (req, res) => {
-  const { accounting_unit_id, full_name, email, role } = req.body;
-  try {
-    await store.run(
-      `INSERT INTO app_user (accounting_unit_id, full_name, email, role) VALUES (?,?,?,?)`,
-      [accounting_unit_id, full_name, email, role || "zadavatel"]
-    );
-    const id = (await store.get("SELECT last_insert_rowid() AS id")).id;
-    store.persist();
-    res.status(201).json(await store.get("SELECT * FROM app_user WHERE id = ?", [id]));
-  } catch (err) { res.status(400).json({ error: err.message }); }
+  res.status(400).json({
+    error: "Přidávání uživatelů přímo bylo zrušeno — zakládalo účet bez hesla, který si mohl zabrat kdokoli se znalostí e-mailu. Použijte pozvánku (Nastavení → Pozvat kolegu).",
+  });
 });
 
 module.exports = router;

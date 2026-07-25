@@ -13,6 +13,30 @@ const { ensureChartOfAccounts } = require("./lib/chartOfAccountsSeed");
 const { ensureCompanyDirectors, fixPlaceholderIco } = require("./lib/companySetup");
 const { requireAuth, blockReadOnlyRoles } = require("./lib/auth");
 
+// Upozornění na konfiguraci, která je technicky funkční, ale v produkci
+// riziková. Jen loguje — nesmí shodit start (appka musí jet, i když je něco
+// nastaveného nešťastně), ale nesmí to ani projít nepovšimnuto.
+function warnOnRiskyConfig() {
+  if (process.env.NODE_ENV !== "production") return;
+  const issuer = process.env.BANKID_ISSUER || "";
+  if (process.env.BANKID_MODE === "live" && /sandbox/i.test(issuer)) {
+    console.warn(
+      `[konfigurace] POZOR: produkční nasazení běží proti SANDBOX BankID (${issuer}). ` +
+      "Reálné přihlášení přes BankID nebude fungovat — po podpisu produkční smlouvy " +
+      "přepněte BANKID_ISSUER na produkční endpoint."
+    );
+  }
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    console.warn(
+      "[konfigurace] POZOR: chybí BLOB_READ_WRITE_TOKEN — přílohy dokladů se ukládají " +
+      "na DOČASNÝ disk serverless funkce a zálohy vůbec neběží (§ 8 ZoÚ, průkaznost a trvalost)."
+    );
+  }
+  if (!process.env.CRON_SECRET) {
+    console.warn("[konfigurace] POZOR: chybí CRON_SECRET — pravidelné faktury ani zálohy se nespustí.");
+  }
+}
+
 async function buildApp(userDataDir) {
   await store.init(userDataDir);
   await seed();
@@ -20,6 +44,8 @@ async function buildApp(userDataDir) {
   await fixPlaceholderIco(store);
   await ensureCompanyDirectors(store);
   store.persist();
+
+  warnOnRiskyConfig();
 
   const app = express();
 
