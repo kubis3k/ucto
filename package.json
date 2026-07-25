@@ -4,6 +4,7 @@
   "private": true,
   "description": "Vercel serverless vstupní bod pro webovou verzi (viz app/ pro desktop Electron appku, api/index.js pro tento web).",
   "dependencies": {
+    "@vercel/blob": "^2.6.1",
     "bcryptjs": "^2.4.3",
     "express": "^4.22.2",
     "jsonwebtoken": "^9.0.3",

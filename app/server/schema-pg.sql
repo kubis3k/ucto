@@ -222,6 +222,8 @@ CREATE TABLE IF NOT EXISTS document_line (
 -- šlo beze změny nad oběma backendy. Na Vercelu (efemérní filesystem) to ale
 -- znamená, že nahrané přílohy nepřežijí cold start/jiný serverless instance —
 -- pro produkční web nasazení je to námět na navazující práci (např. Vercel Blob).
+-- storage_backend / storage_url — viz schema.sql pro vysvětlení, 1:1 překlad.
+-- Na Vercelu je disk funkce dočasný, takže produkčně se používá backend 'blob'.
 CREATE TABLE IF NOT EXISTS document_attachment (
     id                  SERIAL PRIMARY KEY,
     document_id         INTEGER NOT NULL REFERENCES document(id),
@@ -229,8 +231,12 @@ CREATE TABLE IF NOT EXISTS document_attachment (
     mime_type           TEXT NOT NULL,
     file_path           TEXT NOT NULL,
     size_bytes          INTEGER NOT NULL,
+    storage_backend     TEXT NOT NULL DEFAULT 'fs' CHECK (storage_backend IN ('fs','blob')),
+    storage_url         TEXT,
     uploaded_at         TEXT NOT NULL DEFAULT (now()::text)
 );
+ALTER TABLE document_attachment ADD COLUMN IF NOT EXISTS storage_backend TEXT NOT NULL DEFAULT 'fs';
+ALTER TABLE document_attachment ADD COLUMN IF NOT EXISTS storage_url TEXT;
 
 CREATE TABLE IF NOT EXISTS posting (
     id                  SERIAL PRIMARY KEY,

@@ -1340,14 +1340,35 @@ async function loadDocumentAttachments(docId) {
   if (!target) return;
   try {
     const attachments = await api("GET", `/documents/${docId}/attachments`);
+    // Stažení musí jít přes autentizovaný fetch — plain <a href> neposílá
+    // hlavičku Authorization, takže dřív každé kliknutí skončilo na 401.
     target.innerHTML = attachments.length
       ? `<ul style="margin:0;padding-left:18px">${attachments.map((a) => `
-          <li><a href="${API}/documents/attachments/${a.id}/download">${esc(a.file_name)}</a>
+          <li><a href="#" data-action="download-attachment" data-id="${a.id}" data-file-name="${esc(a.file_name)}">${esc(a.file_name)}</a>
             <span class="text-dim" style="font-size:11px">(${(a.size_bytes / 1024).toFixed(0)} kB, ${fmtDate(a.uploaded_at)})</span></li>`).join("")}</ul>`
       : `<span class="text-dim" style="font-size:12px">Zatím žádné přílohy.</span>`;
   } catch (err) {
     target.innerHTML = `<span class="text-dim" style="font-size:12px">${esc(err.message)}</span>`;
   }
+}
+
+// Stáhne přílohu dokladu autentizovaným fetchem (stejný vzor jako
+// downloadInvoicePdf) — server ji podle backendu načte z lokálního disku
+// nebo z objektového úložiště.
+async function downloadAttachment(id, fileName) {
+  try {
+    const headers = {};
+    const token = authToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`${API}/documents/attachments/${id}/download`, { headers });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || res.statusText); }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = fileName || `priloha-${id}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch (err) { toast(err.message, "error"); }
 }
 
 async function handleUploadAttachment(form) {
@@ -3447,6 +3468,11 @@ document.addEventListener("click", async (e) => {
       case "toggle-balance-visibility": toggleBalanceVisibility(); break;
       case "download-desktop": await downloadDesktopInstaller(id); break;
       case "dismiss-desktop-banner": dismissDesktopBanner(); break;
+      case "download-attachment": {
+        e.preventDefault();
+        await downloadAttachment(id, e.target.closest("[data-file-name]")?.dataset.fileName);
+        break;
+      }
       case "auth-tab": AUTH_TAB = e.target.closest("[data-tab]").dataset.tab; renderAuthScreen(); break;
       case "logout": e.preventDefault(); await handleLogout(); break;
       case "add-posting-line": addPostingLineRow(); break;

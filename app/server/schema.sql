@@ -230,6 +230,10 @@ CREATE TABLE IF NOT EXISTS document_line (
     UNIQUE (document_id, line_no)
 );
 
+-- storage_backend: "fs" = lokální disk (desktop/vývoj), "blob" = objektové
+-- úložiště (Vercel Blob) — na serverless je disk dočasný a příloha by zmizela,
+-- viz lib/attachmentStore.js. `file_path` nese klíč v daném úložišti
+-- (absolutní cesta u fs, pathname v Blobu).
 CREATE TABLE IF NOT EXISTS document_attachment (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     document_id         INTEGER NOT NULL REFERENCES document(id),
@@ -237,6 +241,8 @@ CREATE TABLE IF NOT EXISTS document_attachment (
     mime_type           TEXT NOT NULL,
     file_path           TEXT NOT NULL,
     size_bytes          INTEGER NOT NULL,
+    storage_backend     TEXT NOT NULL DEFAULT 'fs' CHECK (storage_backend IN ('fs','blob')),
+    storage_url         TEXT,
     uploaded_at         TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

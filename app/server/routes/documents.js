@@ -9,6 +9,7 @@ const qrplatba = require("../lib/qrplatba");
 const invoiceScan = require("../lib/invoiceScan");
 const { buildInvoicePdf } = require("../lib/invoicePdf");
 const mailer = require("../lib/mailer");
+const attachmentStore = require("../lib/attachmentStore");
 const { getRate } = require("../lib/cnbExchangeRate");
 const router = express.Router();
 
@@ -16,17 +17,11 @@ const ALLOWED_MIME_TYPES = new Set(["application/pdf", "text/csv", "application/
 const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
 const scanUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_ATTACHMENT_BYTES } });
 
-function attachmentsDirFor(documentId) {
-  const dir = path.join(store.getUserDataDir(), "attachments", String(documentId));
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
-}
-
+// memoryStorage (ne diskStorage) — obsah se předává attachmentStore, který
+// rozhodne, jestli jde na objektové úložiště (web) nebo na lokální disk
+// (desktop/vývoj). Limit 15 MB drží paměťovou náročnost pod kontrolou.
 const upload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, attachmentsDirFor(req.params.id)),
-    filename: (req, file, cb) => cb(null, `${Date.now()}_${file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_")}`),
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: MAX_ATTACHMENT_BYTES },
   fileFilter: (req, file, cb) => {
     if (!ALLOWED_MIME_TYPES.has(file.mimetype)) return cb(new Error("Povolené formáty jsou pouze PDF a CSV."));
@@ -438,15 +433,23 @@ router.post("/:id/attachments", async (req, res) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: "Žádný soubor nebyl nahrán." });
     try {
+      const saved = await attachmentStore.save({
+        unitId: req.user.accountingUnitId,
+        documentId: req.params.id,
+        fileName: req.file.originalname,
+        mimeType: req.file.mimetype,
+        buffer: req.file.buffer,
+      });
       await store.run(
-        `INSERT INTO document_attachment (document_id, file_name, mime_type, file_path, size_bytes)
-         VALUES (?,?,?,?,?)`,
-        [req.params.id, req.file.originalname, req.file.mimetype, req.file.path, req.file.size]
+        `INSERT INTO document_attachment (document_id, file_name, mime_type, file_path, size_bytes, storage_backend, storage_url)
+         VALUES (?,?,?,?,?,?,?)`,
+        [req.params.id, req.file.originalname, req.file.mimetype, saved.file_path, saved.size_bytes,
+         saved.storage_backend, saved.storage_url]
       );
       const id = (await store.get("SELECT last_insert_rowid() AS id")).id;
       store.persist();
-      res.status(201).json(await store.get("SELECT id, document_id, file_name, mime_type, size_bytes, uploaded_at FROM document_attachment WHERE id = ?", [id]));
-    } catch (e) { res.status(400).json({ error: e.message }); }
+      res.status(201).json(await store.get("SELECT id, document_id, file_name, mime_type, size_bytes, storage_backend, uploaded_at FROM document_attachment WHERE id = ?", [id]));
+    } catch (e) { res.status(e.status || 400).json({ error: e.message }); }
   });
 });
 
@@ -473,11 +476,14 @@ router.get("/attachments/:attachmentId/download", async (req, res) => {
       [req.params.attachmentId, req.user.accountingUnitId]
     );
     if (!attachment) return res.status(404).json({ error: "Příloha nenalezena" });
-    if (!fs.existsSync(attachment.file_path)) return res.status(404).json({ error: "Soubor přílohy chybí na disku." });
+    // attachmentStore rozliší backend (lokální disk vs. objektové úložiště)
+    // a chybějící soubor hlásí jako err.status = 404.
+    const content = await attachmentStore.load(attachment);
     res.setHeader("Content-Type", attachment.mime_type);
     res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(attachment.file_name)}"`);
-    fs.createReadStream(attachment.file_path).pipe(res);
-  } catch (err) { res.status(400).json({ error: err.message }); }
+    if (content.stream) return content.stream.pipe(res);
+    res.end(content.buffer);
+  } catch (err) { res.status(err.status || 400).json({ error: err.message }); }
 });
 
 // POST /api/documents/:id/payment-link — vytvoří/vrátí trvalý odkaz na
