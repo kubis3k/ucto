@@ -813,9 +813,15 @@ Tato sekce je záměrně explicitní — je určená k rozboru účetní firmou 
 ### 12.2 Co je pokryté jen částečně
 
 - **Elektronické podání DPH** — XML se generuje podle oficiálních XSD Finanční správy, ale
-  pokrývá **jen běžná tuzemská plnění se standardní (21 %) a první sníženou (12 %) sazbou**.
-  Přenesená daňová povinnost, intrakomunitární plnění, dovoz a opravy zůstávají v XML
-  nevyplněné. Aplikace na to výslovně upozorňuje a doporučuje kontrolu před podáním.
+  v produkční verzi pokrývá **jen běžná tuzemská plnění se standardní (21 %) a první
+  sníženou (12 %) sazbou**. Přenesená daňová povinnost, intrakomunitární plnění, dovoz
+  a opravy zůstávají v XML nevyplněné. Aplikace na to výslovně upozorňuje a doporučuje
+  kontrolu před podáním.
+  Mechanismus pro přeshraniční DPH (režimy plnění, samovyměření, souhrnné hlášení DPHSHV,
+  identifikovaná osoba) je hotový na větvi `feature/preshranicni-dph`, ale **záměrně
+  nenasazený**: všechna daňová rozhodnutí (účty, sazby, mapování na řádky přiznání, co
+  patří do souhrnného hlášení) jsou vyvedená do konfigurace, kterou musí potvrdit účetní —
+  viz `DPH_ROZHODNUTI.md`. Dokud ji nepotvrdí, mechanismus odmítne cokoli vygenerovat.
 - **Mapování účtů na řádky výkazů** je návrh dle vyhlášky, nikoli ověřený výklad — má ho
   potvrdit účetní firma (upozornění je i v generovaném PDF).
 - **Zůstatek bankovního účtu** se počítá jako součet naimportovaných pohybů. Systém nemá
@@ -825,12 +831,26 @@ Tato sekce je záměrně explicitní — je určená k rozboru účetní firmou 
 ### 12.3 Technická omezení
 
 - **Triggery pro uzamčení období a měsíce reagují jen na vložení nového záznamu**
-  (`BEFORE INSERT`), nikoli na úpravu. Doklad ve stavu koncept v uzavřeném období by tedy
-  databázový trigger při úpravě nezastavil (aplikační vrstva to ale kontroluje).
-- **Trigger `trg_document_edit_guard` nechrání stav `schvaleny`** — omezení pro schválený
-  doklad je pouze v aplikační logice, ne v databázi.
-- **Přílohy dokladů nejsou ve webové verzi trvale perzistentní** — ukládají se na dočasný
-  disk serverless funkce. Řešením by bylo objektové úložiště (např. Vercel Blob).
+  (`BEFORE INSERT`), nikoli na úpravu. Kontrolu úpravy dělá aplikační vrstva —
+  od 25. 7. 2026 u všech operací s účetním dopadem, včetně editace konceptu
+  (viz sekce 12.4).
+  **Proč se `BEFORE UPDATE` guard na `posting_line` / `document_line` vědomě nepřidal:**
+  u `posting_line` je jakýkoli UPDATE už zakázaný append-only triggerem
+  `trg_posting_line_no_update`, takže by šlo o duplicitní pravidlo. U `document_line`
+  by `BEFORE UPDATE` guard rozbil běžný pracovní postup — editace řádků konceptu je
+  implementovaná jako `DELETE` + `INSERT` celé sady řádků, takže by trigger musel
+  povolit smazání a zakázat úpravu, což by v součtu nic nechránilo. Datum, na kterém
+  zámek závisí, navíc leží na hlavičce dokladu, ne na řádku; kontrola v aplikaci u
+  `PUT /api/documents/:id` (obě data — původní i nové) je proto přesnější než trigger
+  nad řádkem, který sám o sobě datum nezná.
+- ~~**Trigger `trg_document_edit_guard` nechrání stav `schvaleny`**~~ — **opraveno**
+  (25. 7. 2026): trigger nyní pokrývá `schvaleny`, `zauctovany` i `stornovany` v obou
+  variantách schématu se shodnou chybovou hláškou. Regresní test hlídá, že schválený
+  doklad jde dál zaúčtovat i stornovat.
+- ~~**Přílohy dokladů nejsou ve webové verzi trvale perzistentní**~~ — **opraveno**
+  (25. 7. 2026): přílohy jdou do objektového úložiště (Vercel Blob) přes
+  `lib/attachmentStore.js`, bez tokenu se použije lokální disk (vývoj/desktop).
+  Přílohy se ze zálohy nemažou — jsou součástí průkaznosti účetnictví (§ 33a ZoÚ).
 - **Nápověda obsahuje zastaralou informaci** — tvrdí, že data se ukládají lokálně do
   souboru SQLite a nikam se neodesílají. To platilo před přechodem na tenkého klienta;
   dnes je zdrojem pravdy web a Postgres.
@@ -844,14 +864,19 @@ Podrobně v [sekci 9.3.1](#931-opravené-nálezy-z-revize-dokumentace-21-7-2026)
 | Storno účetního zápisu bez kontroly vlastnictví firmou | **opraveno** (21. 7. 2026) + regresní test |
 | `GET /api/users` vracel hash hesel | **opraveno** (21. 7. 2026) + regresní test |
 | Role neomezovaly prakticky nic | **opraveno** (21. 7. 2026) — viz model rolí |
-| Fail-open default u BankID (`mock`) | otevřeno; v produkci uzavřeno konfigurací (`live`) |
-| `set-password` bez autentizace | dnes uzavřeno (všichni mají heslo), ale „Přidat uživatele" ho znovu otevře — **používejte pozvánky** |
-| BankID běží proti **sandbox** prostředí | čeká na produkční smlouvu s BankID |
+| Fail-open default u BankID (`mock`) | **opraveno** (25. 7. 2026) — bez výslovného `BANKID_MODE` se ověření odmítne; mock jen při `BANKID_MODE=mock` **a** neprodukčním `NODE_ENV` + regresní test |
+| `set-password` bez autentizace | **opraveno** (25. 7. 2026) — heslo lze nastavit jen s platnou pozvánkou na stejný e-mail (jednorázovou) nebo z vlastní session; `POST /api/users` už uživatele bez hesla nezakládá + 5 regresních testů |
+| Zámky období/měsíce obcházené operacemi s nepřímým dopadem | **opraveno** (25. 7. 2026) — párování banky, rychlé zaúčtování, obě storno cesty, přecenění kurzů, inventura i editace konceptu kontrolují období i měsíc + 11 regresních testů |
+| BankID běží proti **sandbox** prostředí | čeká na produkční smlouvu s BankID (rozhodnutí vlastníka); v produkci se při startu loguje varování |
 
 ### 12.5 Provozní rizika
 
-- **Žádné automatické zálohování** mimo zálohování na straně poskytovatele databáze.
-  Export dat je jen ruční akce (CSV).
+- ~~**Žádné automatické zálohování**~~ — **opraveno** (25. 7. 2026): denní cron
+  `GET /api/cron/backup` serializuje všechny tabulky do objektového úložiště
+  (`backups/`, retence `BACKUP_RETENTION_DAYS`, výchozí 90 dní) a
+  `app/server/scripts/restore-backup.js` umí obnovu. Druhá vrstva (PITR / branching
+  u poskytovatele databáze) se **musí zapnout ručně na straně Neonu** — viz sekce 10.6.
+  Jedna vrstva zálohy není záloha.
 - **Žádné monitorování chyb** (error tracking) na produkčním webu.
 - **Žádné externí penetrační testování** — proveden pouze interní bezpečnostní audit.
 - **Žádná podpora ani záruka třetí strany** — na rozdíl od komerčních systémů neexistuje
@@ -872,7 +897,7 @@ Vše pod `/api` je chráněné, s výjimkou endpointů uvedených v [sekci 9.4](
 |---|---|
 | `POST /register-company` | Založí firmu + prvního uživatele (admin) + celý účtový rozvrh. Vrací JWT. |
 | `POST /login` | E-mail + heslo → JWT. |
-| `POST /set-password` | Nastaví heslo uživateli, který zatím žádné nemá. |
+| `POST /set-password` | Nastaví heslo uživateli bez hesla — **jen** s platnou jednorázovou pozvánkou na stejný e-mail, nebo z vlastní přihlášené session. Jinak 403. |
 | `POST /logout` | Bez efektu na serveru (Bearer token nelze revokovat). |
 | `GET /me` | Profil přihlášeného uživatele + údaje firmy. |
 | `POST /invite` | Vytvoří pozvánku kolegy. **Jen role admin.** |
