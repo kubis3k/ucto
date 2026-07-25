@@ -27,6 +27,11 @@ CREATE TABLE IF NOT EXISTS accounting_unit (
                             CHECK (unit_category IN ('mikro','mala','stredni','velka')),
     is_vat_payer        INTEGER NOT NULL DEFAULT 0,
     vat_payer_since     TEXT,
+    -- FAZE B: identifikovana osoba (§ 6g-6i ZDPH) — vznika typicky prijetim
+    -- sluzby ze zahranici, NEZAVISLE na obratovem limitu a platcovstvi.
+    -- Presne podminky vzniku a lhuta registrace = rozhodovaci bod pro ucetni.
+    identifikovana_osoba INTEGER NOT NULL DEFAULT 0,
+    identifikovana_osoba_od TEXT,
     fiscal_year_start_month INTEGER NOT NULL DEFAULT 1 CHECK (fiscal_year_start_month BETWEEN 1 AND 12),
     iban                TEXT,
     bank_account        TEXT,
@@ -166,6 +171,18 @@ CREATE TABLE IF NOT EXISTS project (
 -- ---------------------------------------------------------------------
 -- Doklady (§ 11 ZoÚ náležitosti)
 -- ---------------------------------------------------------------------
+-- ---------------------------------------------------------------------
+-- FAZE B (preshranicni DPH) — rezim plneni pro ucely DPH.
+--
+-- MECHANISMUS, NE DANOVE ROZHODNUTI. Enum jen POJMENOVAVA situace; co z kazde
+-- pravne vyplyva (radek priznani, sazba, narok na odpocet, zda jde do
+-- souhrnneho hlaseni) NENI nikde v kodu zadratovane — je to obsah tabulky
+-- vat_regime_config, kterou musi vyplnit a POTVRDIT ucetni. Dokud neni
+-- potvrzena, mechanismus odmitne generovat zapisy. Viz DPH_ROZHODNUTI.md.
+--
+-- Vychozi 'tuzemsko_standard' zachovava dosavadni chovani vsech existujicich
+-- dokladu bez zmeny.
+-- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS document (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     accounting_unit_id  INTEGER NOT NULL REFERENCES accounting_unit(id),
@@ -193,6 +210,11 @@ CREATE TABLE IF NOT EXISTS document (
     fx_rate_unit        INTEGER DEFAULT 1,
 
     is_vat_document     INTEGER NOT NULL DEFAULT 0,
+    vat_regime          TEXT NOT NULL DEFAULT 'tuzemsko_standard'
+                            CHECK (vat_regime IN ('tuzemsko_standard','reverse_charge_tuzemsko','reverse_charge_sluzba_eu',
+                             'reverse_charge_sluzba_3zeme','intrakomunitarni_porizeni_zbozi',
+                             'dodani_zbozi_eu','sluzba_eu_poskytnuta','dovoz','vyvoz',
+                             'osvobozeno','mimo_predmet')),
     vat_base_amount     REAL,
     vat_rate            REAL,
     vat_amount          REAL,
@@ -284,8 +306,39 @@ CREATE TABLE IF NOT EXISTS vat_ledger_entry (
     vat_amount              REAL NOT NULL,
     counterparty_dic        TEXT,
     duzp                    TEXT NOT NULL,
-    requires_individual_kh  INTEGER NOT NULL DEFAULT 0
+    requires_individual_kh  INTEGER NOT NULL DEFAULT 0,
+    -- FAZE B: rezim plneni (viz document.vat_regime) — umoznuje evidovat
+    -- i radky mimo tuzemsky standard a odlisit je ve vystupech.
+    vat_regime              TEXT NOT NULL DEFAULT 'tuzemsko_standard',
+    -- Souhrnne hlaseni pracuje s `k_stat` + `c_vat` ODDELENE (dle XSD
+    -- dphshv_epo2.xsd), na rozdil od tuzemskeho DIC v jednom poli.
+    counterparty_vat_id     TEXT,
+    counterparty_country    TEXT
 );
+
+-- Mapovani rezimu plneni na ucty a danove dusledky — JEDEN RADEK NA REZIM
+-- A FIRMU. Prazdna nebo nepotvrzena konfigurace = mechanismus se nespusti.
+-- confirmed_at vyplni ucetni az po odsouhlaseni DPH_ROZHODNUTI.md.
+--
+-- deduction_allowed / include_in_summary_report jsou zamerne NULLABLE:
+-- NULL znamena "nerozhodnuto", ne "ne". Rozdil je podstatny — nerozhodnuto
+-- musi mechanismus zastavit, kdezto "ne" je platna odpoved.
+CREATE TABLE IF NOT EXISTS vat_regime_config (
+    id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+    accounting_unit_id        INTEGER NOT NULL REFERENCES accounting_unit(id),
+    vat_regime                TEXT NOT NULL,
+    output_vat_account_id     INTEGER REFERENCES chart_of_accounts(id),
+    input_vat_account_id      INTEGER REFERENCES chart_of_accounts(id),
+    deduction_allowed         INTEGER,
+    include_in_summary_report INTEGER,
+    summary_report_code       TEXT,
+    vat_return_row            TEXT,
+    note                      TEXT,
+    confirmed_at              TEXT,
+    confirmed_by              INTEGER REFERENCES app_user(id),
+    UNIQUE (accounting_unit_id, vat_regime)
+);
+
 
 -- ---------------------------------------------------------------------
 -- Dlouhodobý majetek a odpisy

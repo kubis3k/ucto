@@ -684,17 +684,41 @@ async function refreshCoreState() {
   STATE.periods = await api("GET", `/periods?unit=${STATE.unit.id}`);
 }
 
+// Varování k přeshraniční DPH (FÁZE B). ZÁMĚRNĚ nic netvrdí — jen upozorní, že
+// je co ověřit s účetní. Systém nerozhoduje, jestli povinnost vznikla; hlásí
+// jen situaci, ve které se to má prověřit (§ 6g-6i ZDPH pro identifikovanou
+// osobu, § 102 pro souhrnné hlášení).
+function renderCrossBorderVatWarning(regimeStates) {
+  if (!Array.isArray(regimeStates) || !regimeStates.length) return "";
+  const crossBorder = regimeStates.filter((r) => r.cross_border);
+  const nepotvrzene = crossBorder.filter((r) => r.config && !r.ready);
+  const msgs = [];
+
+  if (!STATE.unit.is_vat_payer && !STATE.unit.identifikovana_osoba) {
+    msgs.push(`Firma není vedena jako plátce DPH ani jako identifikovaná osoba. Pokud přijímáte služby ze zahraničí (reklama, cloud, software), ověřte s účetní, zda nevznikla registrační povinnost identifikované osoby (§ 6g–6i ZDPH). Stav nastavíte v <a href="#vat">Nastavení DPH</a>.`);
+  }
+  if (nepotvrzene.length) {
+    msgs.push(`Přeshraniční režimy DPH mají rozpracovanou, ale nepotvrzenou konfiguraci (${nepotvrzene.map((r) => r.label).join(", ")}). Dokud ji účetní nepotvrdí, samovyměření ani souhrnné hlášení systém negeneruje.`);
+  }
+  if (!msgs.length) return "";
+  return `<div class="panel" style="border-left:3px solid var(--warn, #c99a00)">
+    <h2>Přeshraniční DPH — k ověření s účetní</h2>
+    <ul style="margin:0;padding-left:18px;line-height:1.6">${msgs.map((m) => `<li>${m}</li>`).join("")}</ul>
+  </div>`;
+}
+
 // =====================================================================
 // DASHBOARD
 // =====================================================================
 async function renderDashboard() {
   const unit = STATE.unit.id;
-  const [obrat, pohledavky, docs, log, cashflow] = await Promise.all([
+  const [obrat, pohledavky, docs, log, cashflow, regimes] = await Promise.all([
     api("GET", `/reports/obrat-dph?unit=${unit}`),
     api("GET", `/reports/pohledavky-zavazky?unit=${unit}`),
     api("GET", `/documents?unit=${unit}&status=koncept`),
     api("GET", `/audit-log?unit=${unit}&limit=8`),
     api("GET", `/bank/cashflow?unit=${unit}`),
+    api("GET", `/vat/regimes`).catch(() => []),
   ]);
   const overdue = pohledavky.filter((p) => p.dni_po_splatnosti > 0);
   const m = cashflow.monthly || [];
@@ -703,6 +727,7 @@ async function renderDashboard() {
 
   document.getElementById("view").innerHTML = `
     ${renderMobileBalanceHero(totalBalance)}
+    ${renderCrossBorderVatWarning(regimes)}
     <div class="kpi-grid">
       <div class="kpi ${obrat.blizi_se_limitu_dph ? "bad" : ""}">
         <div class="label">Obrat za 12 měsíců</div>
@@ -2883,6 +2908,8 @@ async function renderVat() {
       <form data-form="toggle-vat" class="form-grid" style="align-items:end">
         <div><label>Plátce DPH</label><select name="is_vat_payer"><option value="false" ${!STATE.unit.is_vat_payer?"selected":""}>Ne</option><option value="true" ${STATE.unit.is_vat_payer?"selected":""}>Ano</option></select></div>
         <div><label>Platnost od</label><input type="date" name="vat_payer_since" value="${STATE.unit.vat_payer_since || todayISO()}" /></div>
+        <div><label>Identifikovaná osoba (§ 6g–6i ZDPH)</label><select name="identifikovana_osoba"><option value="false" ${!STATE.unit.identifikovana_osoba?"selected":""}>Ne</option><option value="true" ${STATE.unit.identifikovana_osoba?"selected":""}>Ano</option></select></div>
+        <div><label>Identifikovanou osobou od</label><input type="date" name="identifikovana_osoba_od" value="${STATE.unit.identifikovana_osoba_od || ""}" /></div>
         <div><button type="submit">Uložit</button></div>
       </form>
     </div>
@@ -2952,6 +2979,8 @@ async function handleToggleVat(form) {
   await api("PATCH", `/units/${STATE.unit.id}`, {
     is_vat_payer: fd.get("is_vat_payer") === "true",
     vat_payer_since: fd.get("vat_payer_since"),
+    identifikovana_osoba: fd.get("identifikovana_osoba") === "true",
+    identifikovana_osoba_od: fd.get("identifikovana_osoba_od") || null,
   });
   const units = await api("GET", "/units");
   STATE.unit = units.find((u) => u.id === STATE.unit.id);

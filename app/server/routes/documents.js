@@ -11,6 +11,7 @@ const { buildInvoicePdf } = require("../lib/invoicePdf");
 const mailer = require("../lib/mailer");
 const attachmentStore = require("../lib/attachmentStore");
 const { getRate } = require("../lib/cnbExchangeRate");
+const vatRegimes = require("../lib/vatRegimes");
 const router = express.Router();
 
 const ALLOWED_MIME_TYPES = new Set(["application/pdf", "text/csv", "application/vnd.ms-excel", "image/png", "image/jpeg"]);
@@ -61,7 +62,7 @@ router.post("/", async (req, res) => {
   const {
     accounting_unit_id, doc_type, contact_id, project_id, period_id, variable_symbol,
     issue_date, taxable_supply_date, due_date, description, total_amount, currency,
-    is_vat_document, vat_base_amount, vat_rate, vat_amount, counterparty_dic,
+    is_vat_document, vat_base_amount, vat_rate, vat_amount, counterparty_dic, vat_regime,
     responsible_user_id, cash_payee_name, cash_payee_address, cash_payee_id_number,
     lines,
   } = req.body;
@@ -87,12 +88,13 @@ router.post("/", async (req, res) => {
         `INSERT INTO document
           (accounting_unit_id, doc_type, doc_number, variable_symbol, contact_id, project_id, period_id,
            issue_date, taxable_supply_date, due_date, description, total_amount, currency, fx_rate, fx_rate_unit,
-           is_vat_document, vat_base_amount, vat_rate, vat_amount, counterparty_dic,
+           is_vat_document, vat_base_amount, vat_rate, vat_amount, counterparty_dic, vat_regime,
            responsible_user_id, cash_payee_name, cash_payee_address, cash_payee_id_number)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [accounting_unit_id, doc_type, docNumber, variable_symbol || null, contact_id || null, project_id || null, period_id,
          issue_date, taxable_supply_date || null, due_date || null, description, total_amount, cur, fxRate, fxRateUnit,
          is_vat_document ? 1 : 0, vat_base_amount || null, vat_rate || null, vat_amount || null, counterparty_dic || null,
+         vatRegimes.normalize(vat_regime),
          responsible_user_id, cash_payee_name || null, cash_payee_address || null, cash_payee_id_number || null]
       );
       const docId = (await store.get("SELECT last_insert_rowid() AS id")).id;
@@ -126,7 +128,7 @@ router.put("/:id", async (req, res) => {
   const {
     contact_id, project_id, variable_symbol, issue_date, taxable_supply_date, due_date,
     description, total_amount, currency, is_vat_document, vat_base_amount, vat_rate, vat_amount,
-    counterparty_dic, cash_payee_name, cash_payee_address, cash_payee_id_number, lines,
+    counterparty_dic, vat_regime, cash_payee_name, cash_payee_address, cash_payee_id_number, lines,
   } = req.body;
   try {
     const existing = await store.get("SELECT * FROM document WHERE id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
@@ -188,7 +190,7 @@ router.put("/:id", async (req, res) => {
         `UPDATE document SET
            contact_id=?, project_id=?, variable_symbol=?, issue_date=?, taxable_supply_date=?, due_date=?,
            description=?, total_amount=?, currency=?, fx_rate=?, fx_rate_unit=?,
-           is_vat_document=?, vat_base_amount=?, vat_rate=?, vat_amount=?, counterparty_dic=?,
+           is_vat_document=?, vat_base_amount=?, vat_rate=?, vat_amount=?, counterparty_dic=?, vat_regime=?,
            cash_payee_name=?, cash_payee_address=?, cash_payee_id_number=?
          WHERE id=? AND accounting_unit_id=?`,
         [
@@ -198,6 +200,7 @@ router.put("/:id", async (req, res) => {
           is_vat_document === undefined ? existing.is_vat_document : (is_vat_document ? 1 : 0),
           vat_base_amount ?? existing.vat_base_amount, vat_rate ?? existing.vat_rate, vat_amount ?? existing.vat_amount,
           counterparty_dic ?? existing.counterparty_dic,
+          vatRegimes.normalize(vat_regime ?? existing.vat_regime),
           cash_payee_name ?? existing.cash_payee_name, cash_payee_address ?? existing.cash_payee_address,
           cash_payee_id_number ?? existing.cash_payee_id_number,
           req.params.id, req.user.accountingUnitId,

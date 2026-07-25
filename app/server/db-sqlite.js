@@ -109,6 +109,19 @@ async function migrate() {
   // úložiště), viz lib/attachmentStore.js. Staré řádky zůstávají 'fs'.
   await ensureColumn("document_attachment", "storage_backend", "TEXT NOT NULL DEFAULT 'fs'");
   await ensureColumn("document_attachment", "storage_url", "TEXT");
+  // FÁZE B (přeshraniční DPH) — režim plnění. Výchozí 'tuzemsko_standard'
+  // znamená, že existující doklady se chovají přesně jako dřív. CHECK
+  // constraint na sloupci přes ALTER TABLE v SQLite nejde doplnit; hodnoty
+  // validuje aplikační vrstva (lib/vatRegimes.js) — v nové DB ze schema.sql
+  // CHECK existuje, u migrované ne. Rozdíl je vědomý: přebudování tabulky
+  // document by znamenalo DROP+CREATE, což u append-only tabulky s triggery
+  // nechceme riskovat.
+  await ensureColumn("document", "vat_regime", "TEXT NOT NULL DEFAULT 'tuzemsko_standard'");
+  await ensureColumn("vat_ledger_entry", "vat_regime", "TEXT NOT NULL DEFAULT 'tuzemsko_standard'");
+  await ensureColumn("vat_ledger_entry", "counterparty_vat_id", "TEXT");
+  await ensureColumn("vat_ledger_entry", "counterparty_country", "TEXT");
+  await ensureColumn("accounting_unit", "identifikovana_osoba", "INTEGER NOT NULL DEFAULT 0");
+  await ensureColumn("accounting_unit", "identifikovana_osoba_od", "TEXT");
 }
 
 function persist() {

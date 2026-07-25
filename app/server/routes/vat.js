@@ -1,7 +1,13 @@
 const express = require("express");
 const store = require("../db");
-const { generateDphDp3Xml, generateKontrolniHlaseniXml } = require("../lib/eDaneXml");
+const { generateDphDp3Xml, generateKontrolniHlaseniXml, generateSouhrnneHlaseniXml, parseVatReturnMapping } = require("../lib/eDaneXml");
+const { requireRole } = require("../lib/auth");
+const regimes = require("../lib/vatRegimes");
+const selfAssessment = require("../lib/vatSelfAssessment");
 const router = express.Router();
+
+const ADMIN_OR_ACCOUNTANT = requireRole("admin", "ucetni");
+const DOMESTIC = regimes.DEFAULT_REGIME;
 
 const KH_THRESHOLD = 10000; // § 100 ZDPH — kontrolní hlášení vyžaduje jednotlivou evidenci nad 10 000 Kč vč. daně
 
@@ -120,12 +126,16 @@ router.get("/priznani/xml", async (req, res) => {
     }
     const { zdobdOd, zdobdDo, mesic, ctvrt } = periodRange(req.query);
 
+    // Tuzemský standard jde do dosavadních řádků (obrat23/dan23/odp_tuz23...).
+    // Přeshraniční režimy se z tohoto součtu VYLUČUJÍ a řeší se přes potvrzené
+    // mapování níže — jinak by se např. odpočet ze samovyměření objevil zároveň
+    // v tuzemském řádku 40 i v řádku přeshraničním, tedy dvakrát.
     const rows = await store.all(
       `SELECT v.direction, v.vat_rate, SUM(v.vat_base) AS base, SUM(v.vat_amount) AS tax
        FROM vat_ledger_entry v JOIN document d ON d.id = v.document_id
-       WHERE d.accounting_unit_id = ? AND v.duzp BETWEEN ? AND ?
+       WHERE d.accounting_unit_id = ? AND v.duzp BETWEEN ? AND ? AND v.vat_regime = ?
        GROUP BY v.direction, v.vat_rate`,
-      [req.user.accountingUnitId, zdobdOd, zdobdDo]
+      [req.user.accountingUnitId, zdobdOd, zdobdDo, DOMESTIC]
     );
     const zero = { base: 0, tax: 0 };
     const agg = { out23: { ...zero }, out5: { ...zero }, in23: { ...zero }, in5: { ...zero }, unmapped: [] };
@@ -136,8 +146,10 @@ router.get("/priznani/xml", async (req, res) => {
       else agg.unmapped.push(r);
     }
 
-    const xml = generateDphDp3Xml({ unit, rok: req.query.rok, mesic, ctvrt, zdobdOd, zdobdDo, agg, dPoddp: today() });
+    const crossBorder = await crossBorderRows(req.user.accountingUnitId, zdobdOd, zdobdDo);
+    const xml = generateDphDp3Xml({ unit, rok: req.query.rok, mesic, ctvrt, zdobdOd, zdobdDo, agg, dPoddp: today(), crossBorder });
     if (agg.unmapped.length) res.setHeader("X-Nepokryta-Sazba", "true"); // upozornění pro frontend, viz app.js
+    if (crossBorder.some((c) => !c.mapping)) res.setHeader("X-Nepokryty-Rezim", "true");
     res.setHeader("Content-Type", "application/xml; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="DPHDP3_${req.query.rok}_${mesic || "Q" + ctvrt}.xml"`);
     res.send(xml);
@@ -170,6 +182,206 @@ router.get("/kontrolni-hlaseni/xml", async (req, res) => {
     const xml = generateKontrolniHlaseniXml({ unit, rok: req.query.rok, mesic, ctvrt, zdobdOd, zdobdDo, entries, dPoddp: today() });
     res.setHeader("Content-Type", "application/xml; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="DPHKH1_${req.query.rok}_${mesic || "Q" + ctvrt}.xml"`);
+    res.send(xml);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// ---------------------------------------------------------------------------
+// FÁZE B — přeshraniční DPH. Mechanismus je tady, daňová rozhodnutí ne:
+// všechno, co je právně sporné, si zadává účetní do vat_regime_config a musí to
+// potvrdit. Viz DPH_ROZHODNUTI.md.
+// ---------------------------------------------------------------------------
+
+// Přeshraniční plnění za období, každé s mapováním z konfigurace (nebo bez něj).
+async function crossBorderRows(unitId, start, end) {
+  const rows = await store.all(
+    `SELECT v.vat_regime, v.direction, SUM(v.vat_base) AS base, SUM(v.vat_amount) AS tax
+     FROM vat_ledger_entry v JOIN document d ON d.id = v.document_id
+     WHERE d.accounting_unit_id = ? AND v.duzp BETWEEN ? AND ? AND v.vat_regime <> ?
+     GROUP BY v.vat_regime, v.direction`,
+    [unitId, start, end, DOMESTIC]
+  );
+  const configs = await store.all(
+    "SELECT vat_regime, vat_return_row, confirmed_at FROM vat_regime_config WHERE accounting_unit_id = ?",
+    [unitId]
+  );
+  const byRegime = new Map(configs.map((c) => [c.vat_regime, c]));
+  return rows.map((r) => {
+    const cfg = byRegime.get(r.vat_regime);
+    const meta = regimes.get(r.vat_regime);
+    return {
+      regime: r.vat_regime,
+      label: meta ? meta.label : r.vat_regime,
+      direction: r.direction,
+      base: Number(r.base) || 0,
+      tax: Number(r.tax) || 0,
+      // Nepotvrzenou konfiguraci úmyslně ignorujeme — rozpracované mapování
+      // nesmí propadnout do podání.
+      mapping: cfg && cfg.confirmed_at ? cfg.vat_return_row : null,
+    };
+  });
+}
+
+// GET /api/vat/regimes — katalog režimů + stav konfigurace (co ještě chybí).
+router.get("/regimes", async (req, res) => {
+  try {
+    res.json(await selfAssessment.listConfig(req.user.accountingUnitId));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/vat/regimes/:regime — účetní zadává účty a daňové důsledky režimu.
+// `confirm: true` znamená "potvrzuji, že to takhle je" — bez toho mechanismus
+// samovyměření zůstane vypnutý.
+router.put("/regimes/:regime", ADMIN_OR_ACCOUNTANT, async (req, res) => {
+  const unitId = req.user.accountingUnitId;
+  try {
+    const regime = regimes.assertKnown(req.params.regime);
+    const {
+      output_vat_account_id, input_vat_account_id, deduction_allowed,
+      include_in_summary_report, summary_report_code, vat_return_row, note, confirm,
+    } = req.body;
+
+    // Mapování na přiznání validujeme hned — chyba v konfiguraci se má projevit
+    // při zadávání, ne až při generování podání.
+    if (vat_return_row) parseVatReturnMapping(vat_return_row);
+
+    for (const [field, value] of [["output_vat_account_id", output_vat_account_id], ["input_vat_account_id", input_vat_account_id]]) {
+      if (value === null || value === undefined || value === "") continue;
+      const acc = await store.get("SELECT id FROM chart_of_accounts WHERE id = ? AND accounting_unit_id = ?", [value, unitId]);
+      if (!acc) return res.status(400).json({ error: `${field}: účet nepatří této účetní jednotce.` });
+    }
+
+    const tri = (v) => (v === null || v === undefined || v === "" ? null : Number(v) ? 1 : 0);
+    const existing = await selfAssessment.getConfig(unitId, regime);
+    const confirmedAt = confirm ? new Date().toISOString().slice(0, 19).replace("T", " ") : (existing ? existing.confirmed_at : null);
+    const confirmedBy = confirm ? req.user.id : (existing ? existing.confirmed_by : null);
+
+    if (existing) {
+      await store.run(
+        `UPDATE vat_regime_config SET output_vat_account_id=?, input_vat_account_id=?, deduction_allowed=?,
+           include_in_summary_report=?, summary_report_code=?, vat_return_row=?, note=?, confirmed_at=?, confirmed_by=?
+         WHERE id = ?`,
+        [output_vat_account_id || null, input_vat_account_id || null, tri(deduction_allowed),
+         tri(include_in_summary_report), summary_report_code || null, vat_return_row || null,
+         note || null, confirmedAt, confirmedBy, existing.id]
+      );
+    } else {
+      await store.run(
+        `INSERT INTO vat_regime_config (accounting_unit_id, vat_regime, output_vat_account_id, input_vat_account_id,
+           deduction_allowed, include_in_summary_report, summary_report_code, vat_return_row, note, confirmed_at, confirmed_by)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+        [unitId, regime, output_vat_account_id || null, input_vat_account_id || null, tri(deduction_allowed),
+         tri(include_in_summary_report), summary_report_code || null, vat_return_row || null,
+         note || null, confirmedAt, confirmedBy]
+      );
+    }
+    store.persist();
+    const saved = await selfAssessment.getConfig(unitId, regime);
+    res.json({ config: saved, blockers: selfAssessment.configBlockers(saved, regime) });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// POST /api/vat/self-assessment/:documentId — vygeneruje zápis samovyměření.
+// Odmítne se, dokud účetní nepotvrdí konfiguraci režimu (HTTP 409 + výpis toho,
+// co chybí).
+router.post("/self-assessment/:documentId", ADMIN_OR_ACCOUNTANT, async (req, res) => {
+  try {
+    const result = await store.transaction(async () =>
+      selfAssessment.generateSelfAssessmentPosting({
+        documentId: req.params.documentId,
+        unitId: req.user.accountingUnitId,
+        userId: req.user.id,
+      })
+    );
+    store.persist();
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message, blockers: err.blockers });
+  }
+});
+
+// GET /api/vat/souhrnne-hlaseni?rok=2026&mesic=7 — podklad pro souhrnné hlášení
+// (§ 102 ZDPH). Do hlášení jdou POUZE režimy, u kterých účetní potvrdila
+// `include_in_summary_report = 1` a doplnila `summary_report_code` (kód plnění
+// k_pln_eu dle dphshv_epo2.xsd). Systém sám nerozhoduje, co tam patří.
+async function summaryReportData(unitId, start, end) {
+  const configs = await store.all(
+    "SELECT * FROM vat_regime_config WHERE accounting_unit_id = ? AND confirmed_at IS NOT NULL",
+    [unitId]
+  );
+  const included = configs.filter((c) => Number(c.include_in_summary_report) === 1);
+  const warnings = [];
+  const undecided = configs.filter((c) => c.include_in_summary_report === null || c.include_in_summary_report === undefined);
+  for (const c of undecided) {
+    warnings.push(`Režim ${c.vat_regime}: není rozhodnuto, zda patří do souhrnného hlášení — plnění není zahrnuto.`);
+  }
+  const missingCode = included.filter((c) => !c.summary_report_code);
+  for (const c of missingCode) {
+    warnings.push(`Režim ${c.vat_regime}: má být v souhrnném hlášení, ale chybí kód plnění (k_pln_eu) — plnění není zahrnuto.`);
+  }
+
+  const usable = included.filter((c) => c.summary_report_code);
+  if (!usable.length) {
+    return { rows: [], warnings, configured_regimes: [] };
+  }
+  const placeholders = usable.map(() => "?").join(",");
+  const entries = await store.all(
+    `SELECT v.vat_regime, v.counterparty_country, v.counterparty_vat_id, v.counterparty_dic,
+            v.vat_base, v.document_id
+     FROM vat_ledger_entry v JOIN document d ON d.id = v.document_id
+     WHERE d.accounting_unit_id = ? AND v.duzp BETWEEN ? AND ?
+       AND v.direction = 'uskutecnene' AND v.vat_regime IN (${placeholders})`,
+    [unitId, start, end, ...usable.map((c) => c.vat_regime)]
+  );
+  const codeOf = new Map(usable.map((c) => [c.vat_regime, c.summary_report_code]));
+
+  // Agregace na (stát, VAT ID, kód plnění) — jeden řádek VetaR na kombinaci,
+  // pln_pocet = počet dokladů, pln_hodnota = součet základů (celé Kč).
+  const acc = new Map();
+  for (const e of entries) {
+    const split = e.counterparty_vat_id
+      ? { country: e.counterparty_country, vatId: e.counterparty_vat_id }
+      : selfAssessment.splitVatId(e.counterparty_dic);
+    if (!split.country || !split.vatId) {
+      warnings.push(`Doklad id ${e.document_id}: chybí VAT ID protistrany včetně předčíslí státu — řádek nelze do hlášení uvést.`);
+      continue;
+    }
+    const code = codeOf.get(e.vat_regime);
+    const key = `${split.country}|${split.vatId}|${code}`;
+    const prev = acc.get(key) || { country: split.country, vat_id: split.vatId, code, count: 0, value: 0 };
+    prev.count += 1;
+    prev.value += Number(e.vat_base) || 0;
+    acc.set(key, prev);
+  }
+  return { rows: [...acc.values()], warnings, configured_regimes: usable.map((c) => ({ vat_regime: c.vat_regime, code: c.summary_report_code })) };
+}
+
+router.get("/souhrnne-hlaseni", async (req, res) => {
+  try {
+    const { zdobdOd, zdobdDo } = periodRange(req.query);
+    const data = await summaryReportData(req.user.accountingUnitId, zdobdOd, zdobdDo);
+    res.json({ obdobi: { od: zdobdOd, do: zdobdDo }, ...data });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+router.get("/souhrnne-hlaseni/xml", async (req, res) => {
+  try {
+    const unit = await store.get("SELECT * FROM accounting_unit WHERE id = ?", [req.user.accountingUnitId]);
+    if (!unit.dic || !unit.ufo_code) {
+      return res.status(400).json({ error: "Pro elektronické podání vyplňte v Nastavení DIČ a kód finančního úřadu." });
+    }
+    const { zdobdOd, zdobdDo, mesic, ctvrt } = periodRange(req.query);
+    const { rows, warnings } = await summaryReportData(req.user.accountingUnitId, zdobdOd, zdobdDo);
+    if (!rows.length) {
+      return res.status(400).json({
+        error: "Za zadané období není co do souhrnného hlášení uvést. Zkontrolujte nastavení režimů DPH — dokud účetní nepotvrdí, které režimy do hlášení patří, systém hlášení negeneruje.",
+        warnings,
+      });
+    }
+    const xml = generateSouhrnneHlaseniXml({ unit, rok: req.query.rok, mesic, ctvrt, rows, dPoddp: today(), warnings });
+    if (warnings.length) res.setHeader("X-Nepokryty-Rezim", "true");
+    res.setHeader("Content-Type", "application/xml; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="DPHSHV_${req.query.rok}_${mesic || "Q" + ctvrt}.xml"`);
     res.send(xml);
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
