@@ -72,4 +72,45 @@ test("cross-tenant IDOR protection", async (t) => {
     const res = await fetchA(`/api/documents/${doc.id}`);
     assert.equal(res.status, 200);
   });
+
+  // Regrese k opravě z 2026-07-21: POST /api/postings/:id/storno dohledávalo
+  // zápis jen `WHERE id = ?`, takže firma B mohla vytvořit stornovací zápis
+  // v účetnictví firmy A pouhým uhádnutím číselného ID. Path parametr globální
+  // middleware v index.js nepřepisuje, proto to musí řešit sama routa/core.
+  await t.test("company B cannot storno company A's accounting entry", async () => {
+    const accounts = await (await fetchA("/api/accounts?unit=x")).json();
+    const posting = await (await fetchA("/api/postings", {
+      method: "POST",
+      body: JSON.stringify({
+        period_id: periods[0].id, posting_date: "2026-07-02", description: "A entry", created_by: a.user.id,
+        lines: [{ account_id: accounts[0].id, side: "MD", amount: 250 }, { account_id: accounts[1].id, side: "D", amount: 250 }],
+      }),
+    })).json();
+
+    const res = await fetchB(`/api/postings/${posting.id}/storno`, {
+      method: "POST", body: JSON.stringify({ reason: "malicious", created_by: b.user.id }),
+    });
+    assert.equal(res.status, 400);
+
+    // Žádný stornovací protizápis nesmí vzniknout.
+    const journalA = await (await fetchA("/api/postings?unit=x")).json();
+    const stornos = journalA.filter((p) => p.storno_of_posting_id === posting.id);
+    assert.equal(stornos.length, 0, "storno firmy B nesmí vytvořit protizápis u firmy A");
+
+    // Vlastník ho stornovat smí (kontrola, že jsme to nezamkli všem).
+    const own = await fetchA(`/api/postings/${posting.id}/storno`, {
+      method: "POST", body: JSON.stringify({ reason: "legit", created_by: a.user.id }),
+    });
+    assert.equal(own.status, 201);
+  });
+
+  await t.test("GET /api/users nevrací password_hash", async () => {
+    const users = await (await fetchA("/api/users?unit=x")).json();
+    assert.ok(users.length >= 1, "firma A musí mít aspoň jednoho uživatele");
+    for (const u of users) {
+      assert.ok(!("password_hash" in u), "odpověď nesmí obsahovat password_hash");
+    }
+    assert.ok(users[0].email, "běžná pole musí zůstat (email)");
+    assert.ok(users[0].role, "běžná pole musí zůstat (role)");
+  });
 });

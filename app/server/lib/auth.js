@@ -69,6 +69,39 @@ function requireAuth(req, res, next) {
   }
 }
 
+// Middleware — vyžaduje jednu z uvedených rolí. Nasazuje se per-routa NAD
+// requireAuth (tj. req.user už existuje).
+//
+// Model rolí (rozhodnuto 2026-07-21, "střední" varianta): role dřív neomezovaly
+// prakticky nic — v celém serveru se kontrolovaly jen na dvou místech, takže
+// i `ctenar` mohl uzavřít účetní období nebo změnit nastavení firmy. Nově:
+//   - `ctenar` nesmí zapisovat vůbec (globální guard v index.js),
+//   - závažné/administrativní úkony (uzávěrky, nastavení firmy, správa
+//     uživatelů, účtový rozvrh) smí jen `admin` a `ucetni`,
+//   - běžná účetní práce (doklady, zaúčtování, storno, banka, číselníky)
+//     zůstává všem ostatním rolím.
+function requireRole(...allowed) {
+  return (req, res, next) => {
+    if (!req.user || !allowed.includes(req.user.role)) {
+      return res.status(403).json({
+        error: `Tuto akci může provést jen: ${allowed.join(", ")}. Vaše role: ${req.user?.role || "neznámá"}.`,
+      });
+    }
+    next();
+  };
+}
+
+// Globální guard — role `ctenar` má jen právo čtení. Vše kromě GET (a OPTIONS,
+// který řeší CORS preflight) se odmítne. Záměrně jako jeden centrální filtr:
+// jinak by stačilo zapomenout requireRole na jediné nové routě a čtenář by
+// mohl zapisovat.
+function blockReadOnlyRoles(req, res, next) {
+  if (req.user?.role === "ctenar" && req.method !== "GET" && req.method !== "OPTIONS") {
+    return res.status(403).json({ error: "Role „čtenář“ má pouze právo čtení — zápis není povolen." });
+  }
+  next();
+}
+
 // "state" pro OIDC (BankID) redirect flow — místo server-side session úložiště
 // (nevhodné pro serverless) se do state zakóduje podepsaný JWT s krátkou
 // platností nesoucí accounting_unit_id, ke kterému se přihlašování vztahuje.
@@ -83,4 +116,4 @@ function verifyState(token) {
   return payload;
 }
 
-module.exports = { hashPassword, verifyPassword, signSession, signState, verifyState, requireAuth };
+module.exports = { hashPassword, verifyPassword, signSession, signState, verifyState, requireAuth, requireRole, blockReadOnlyRoles };

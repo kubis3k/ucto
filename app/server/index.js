@@ -11,7 +11,7 @@ const store = require("./db");
 const { seed } = require("./seed");
 const { ensureChartOfAccounts } = require("./lib/chartOfAccountsSeed");
 const { ensureCompanyDirectors, fixPlaceholderIco } = require("./lib/companySetup");
-const { requireAuth } = require("./lib/auth");
+const { requireAuth, blockReadOnlyRoles } = require("./lib/auth");
 
 async function buildApp(userDataDir) {
   await store.init(userDataDir);
@@ -78,6 +78,9 @@ async function buildApp(userDataDir) {
     if (req.body && typeof req.body === "object") req.body.accounting_unit_id = req.user.accountingUnitId;
     next();
   });
+  // Role `ctenar` = jen čtení. Centrálně, aby nešlo zapomenout na nové routě
+  // (viz lib/auth.js blockReadOnlyRoles).
+  app.use("/api", blockReadOnlyRoles);
   app.use("/api/documents", require("./routes/documents"));
   app.use("/api/postings", require("./routes/postings"));
   app.use("/api/reports", require("./routes/reports"));

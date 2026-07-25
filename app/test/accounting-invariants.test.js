@@ -103,7 +103,7 @@ test("append-only compliance + storno correctness", async (t) => {
   });
 
   await t.test("stornoPosting creates a correctly reversed counter-entry", async () => {
-    const newPostingId = await core.stornoPosting(posting.id, "test storno", a.user.id);
+    const newPostingId = await core.stornoPosting(posting.id, "test storno", a.user.id, a.user.accounting_unit_id);
     const newLines = await store.all("SELECT * FROM posting_line WHERE posting_id = ?", [newPostingId]);
     const origLines = await store.all("SELECT * FROM posting_line WHERE posting_id = ?", [posting.id]);
 

@@ -85,7 +85,7 @@ router.get("/:id", async (req, res) => {
 router.post("/:id/storno", async (req, res) => {
   const { reason, created_by } = req.body;
   try {
-    const newId = await store.transaction(async () => stornoPosting(req.params.id, reason, created_by));
+    const newId = await store.transaction(async () => stornoPosting(req.params.id, reason, created_by, req.user.accountingUnitId));
     res.status(201).json({ storno_posting_id: newId });
   } catch (err) {
     res.status(400).json({ error: err.message });

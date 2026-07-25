@@ -81,8 +81,20 @@ async function assertMonthOpen(unitId, dateStr) {
 
 // Jediný povolený způsob "zrušení" zaúčtovaného zápisu — nový, protichůdný
 // zápis (MD <-> D prohozeno), který odkazuje na původní přes storno_of_posting_id.
-async function stornoPosting(postingId, reason, userId) {
-  const original = await store.get(`SELECT * FROM posting WHERE id = ?`, [postingId]);
+//
+// FIX (2026-07-21, revize dokumentace): `unitId` je POVINNÝ a dohledání zápisu
+// je jím scopované. Dřív se hledalo jen `WHERE id = ?`, což u postings.js
+// POST /:id/storno znamenalo IDOR — přihlášený uživatel jedné firmy mohl
+// vytvořit stornovací zápis v účetnictví jiné firmy uhádnutím číselného ID
+// (globální middleware v index.js přepisuje jen query/body, ne path parametr).
+// Parametr je záměrně povinný a chybí-li, funkce hlasitě spadne — tichý
+// unscoped dotaz by byl horší než výjimka.
+async function stornoPosting(postingId, reason, userId, unitId) {
+  if (!unitId) throw new Error("stornoPosting: chybí unitId (scope na účetní jednotku je povinný).");
+  const original = await store.get(
+    `SELECT * FROM posting WHERE id = ? AND accounting_unit_id = ?`,
+    [postingId, unitId]
+  );
   if (!original) throw new Error("Účetní zápis nenalezen.");
 
   const postingNumber = await nextPostingNumber(original.accounting_unit_id);

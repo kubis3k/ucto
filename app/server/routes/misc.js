@@ -1,7 +1,13 @@
 const express = require("express");
 const store = require("../db");
 const { writeAuditLog } = require("../lib/core");
+const { requireRole } = require("../lib/auth");
 const router = express.Router();
+
+// Administrativní/závažné úkony — jen admin a účetní (viz lib/auth.js
+// requireRole pro zdůvodnění modelu rolí). Odemčení měsíce zůstává nejtvrdší
+// (jen admin), protože ruší už provedenou uzávěrku.
+const ADMIN_OR_ACCOUNTANT = requireRole("admin", "ucetni");
 
 // GET /api/accounts?unit=1
 router.get("/accounts", async (req, res) => {
@@ -11,7 +17,7 @@ router.get("/accounts", async (req, res) => {
 });
 
 // POST /api/accounts — přidání účtu do rozvrhu (konfigurace, kap. 5.3 brief)
-router.post("/accounts", async (req, res) => {
+router.post("/accounts", ADMIN_OR_ACCOUNTANT, async (req, res) => {
   const { accounting_unit_id, account_number, parent_account_id, name, account_class, account_type } = req.body;
   try {
     await store.run(
@@ -33,7 +39,7 @@ router.get("/periods", async (req, res) => {
 });
 
 // POST /api/periods — otevření nového účetního období
-router.post("/periods", async (req, res) => {
+router.post("/periods", ADMIN_OR_ACCOUNTANT, async (req, res) => {
   const { accounting_unit_id, fiscal_year, start_date, end_date } = req.body;
   try {
     await store.run(
@@ -48,7 +54,7 @@ router.post("/periods", async (req, res) => {
 
 // POST /api/periods/:id/close — roční uzávěrka (§ 29-30 ZoÚ). Po zavolání
 // systém odmítne jakýkoli další zápis s datem v tomto období.
-router.post("/periods/:id/close", async (req, res) => {
+router.post("/periods/:id/close", ADMIN_OR_ACCOUNTANT, async (req, res) => {
   const { closed_by } = req.body;
   try {
     const before = await store.get("SELECT * FROM accounting_period WHERE id = ? AND status = 'otevrene' AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
@@ -77,7 +83,7 @@ router.get("/periods/:id/month-locks", async (req, res) => {
 // POST /api/periods/:id/lock-month — { month, locked_by } — měsíční uzávěrka
 // (tvrdý zámek na úrovni měsíce, viz trg_document_month_lock/trg_posting_month_lock
 // v schema.sql/schema-pg.sql — nelze obejít přes API, je to na úrovni DB triggeru).
-router.post("/periods/:id/lock-month", async (req, res) => {
+router.post("/periods/:id/lock-month", ADMIN_OR_ACCOUNTANT, async (req, res) => {
   const { month, locked_by } = req.body;
   try {
     const period = await store.get("SELECT * FROM accounting_period WHERE id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
@@ -128,7 +134,7 @@ router.get("/units", async (req, res) => {
 });
 
 // PATCH /api/units/:id — přepínač "Plátce DPH: ano/ne" apod. (kap. 3.2 brief)
-router.patch("/units/:id", async (req, res) => {
+router.patch("/units/:id", ADMIN_OR_ACCOUNTANT, async (req, res) => {
   const {
     is_vat_payer, vat_payer_since, accounting_mode, name, dic, unit_category, iban, bank_account,
     address, email, phone, logo_data_url, stamp_data_url, signature_data_url,
@@ -176,14 +182,21 @@ router.patch("/units/:id", async (req, res) => {
 });
 
 // GET /api/users?unit=1
+// FIX (2026-07-21, revize dokumentace): výslovný výčet sloupců místo SELECT * —
+// to dřív posílalo do API odpovědi i `password_hash` (bcrypt) všech kolegů.
+// Hash hesla nepatří do žádné odpovědi, ani v rámci vlastní firmy.
 router.get("/users", async (req, res) => {
   try {
-    res.json(await store.all("SELECT * FROM app_user WHERE accounting_unit_id = ? ORDER BY id", [req.query.unit]));
+    res.json(await store.all(
+      `SELECT id, accounting_unit_id, full_name, email, role, active, bankid_verified
+       FROM app_user WHERE accounting_unit_id = ? ORDER BY id`,
+      [req.query.unit]
+    ));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // POST /api/users — přidání uživatele s rolí (kap. 5.10 brief — zadavatel/schvalovatel)
-router.post("/users", async (req, res) => {
+router.post("/users", requireRole("admin"), async (req, res) => {
   const { accounting_unit_id, full_name, email, role } = req.body;
   try {
     await store.run(

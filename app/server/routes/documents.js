@@ -265,7 +265,7 @@ router.post("/:id/storno", async (req, res) => {
         [req.params.id]
       );
       for (const p of postings) {
-        await stornoPosting(p.id, reason || "Storno dokladu", user_id);
+        await stornoPosting(p.id, reason || "Storno dokladu", user_id, req.user.accountingUnitId);
       }
       await store.run("UPDATE document SET status = 'stornovany' WHERE id = ? AND accounting_unit_id = ?", [req.params.id, req.user.accountingUnitId]);
       await writeAuditLog({ unitId: before.accounting_unit_id, userId: user_id, action: "STORNO", table: "document", entityId: req.params.id, before, after: { status: "stornovany", reason, reversed_postings: postings.map((p) => p.id) } });
