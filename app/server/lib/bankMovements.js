@@ -18,7 +18,16 @@ async function createBankStatementLine({ unitId, bankAccount, date, amount, coun
       "SELECT * FROM bank_statement_line WHERE accounting_unit_id = ? AND external_ref = ?",
       [unitId, externalRef]
     );
-    if (existing) return existing;
+    if (existing) {
+      // Bankovní ID je autoritativní identita, ne důvod ponechat hodnoty
+      // chybně naparsované starší verzí. Vazby na doklad/posting zachováme.
+      await store.run(
+        `UPDATE bank_statement_line SET bank_account=?,statement_date=?,amount=?,
+          counterparty_name=?,variable_symbol=?,superseded_by_bank_line_id=NULL WHERE id=?`,
+        [bankAccount, date, amount, counterpartyName || null, variableSymbol || null, existing.id]
+      );
+      return store.get("SELECT * FROM bank_statement_line WHERE id = ?", [existing.id]);
+    }
   }
   await store.run(
     `INSERT INTO bank_statement_line (accounting_unit_id, bank_account, statement_date, amount, counterparty_name, variable_symbol, external_ref)
