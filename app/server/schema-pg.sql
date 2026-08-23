@@ -310,6 +310,7 @@ CREATE TABLE IF NOT EXISTS bank_statement_line (
 );
 ALTER TABLE bank_statement_line ADD COLUMN IF NOT EXISTS posting_id INTEGER REFERENCES posting(id);
 ALTER TABLE bank_statement_line ADD COLUMN IF NOT EXISTS external_ref TEXT;
+ALTER TABLE bank_statement_line ADD COLUMN IF NOT EXISTS superseded_by_bank_line_id INTEGER REFERENCES bank_statement_line(id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_statement_line_external_ref
     ON bank_statement_line(accounting_unit_id, external_ref) WHERE external_ref IS NOT NULL;
 

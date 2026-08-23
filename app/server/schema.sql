@@ -329,6 +329,7 @@ CREATE TABLE IF NOT EXISTS bank_statement_line (
     -- viz lib/bankMovements.js createBankStatementLine a UNIQUE index níže
     -- (přidán přes db-sqlite.js migrate(), SQLite nemá ADD COLUMN IF NOT EXISTS).
     external_ref        TEXT,
+    superseded_by_bank_line_id INTEGER REFERENCES bank_statement_line(id),
     imported_at         TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

@@ -23,7 +23,7 @@ function normalizeParty(name) { return (name || "").trim().toLowerCase().slice(0
 router.get("/", async (req, res) => {
   try {
     res.json(await store.all(
-      "SELECT * FROM bank_statement_line WHERE accounting_unit_id = ? ORDER BY statement_date DESC",
+      "SELECT * FROM bank_statement_line WHERE accounting_unit_id = ? AND superseded_by_bank_line_id IS NULL ORDER BY statement_date DESC",
       [req.query.unit]
     ));
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -351,7 +351,7 @@ router.post("/:id/match", async (req, res) => {
 router.get("/suggest-matches", async (req, res) => {
   try {
     const unmatched = await store.all(
-      "SELECT * FROM bank_statement_line WHERE accounting_unit_id = ? AND matched_document_id IS NULL",
+      "SELECT * FROM bank_statement_line WHERE accounting_unit_id = ? AND superseded_by_bank_line_id IS NULL AND matched_document_id IS NULL",
       [req.query.unit]
     );
     const suggestions = [];
@@ -377,7 +377,7 @@ router.get("/suggest-categories", async (req, res) => {
   try {
     const unit = req.query.unit;
     const unmatched = await store.all(
-      "SELECT * FROM bank_statement_line WHERE accounting_unit_id = ? AND matched_document_id IS NULL AND posting_id IS NULL",
+      "SELECT * FROM bank_statement_line WHERE accounting_unit_id = ? AND superseded_by_bank_line_id IS NULL AND matched_document_id IS NULL AND posting_id IS NULL",
       [unit]
     );
     const accounts = await store.all("SELECT id, account_number FROM chart_of_accounts WHERE accounting_unit_id = ?", [unit]);
@@ -525,7 +525,7 @@ function buildInboundAddress(token) {
 router.get("/cashflow", async (req, res) => {
   try {
     const unit = req.query.unit;
-    const lines = await store.all("SELECT bank_account, amount, statement_date FROM bank_statement_line WHERE accounting_unit_id = ?", [unit]);
+    const lines = await store.all("SELECT bank_account, amount, statement_date FROM bank_statement_line WHERE accounting_unit_id = ? AND superseded_by_bank_line_id IS NULL", [unit]);
     const balances = {};
     for (const l of lines) balances[l.bank_account] = (balances[l.bank_account] || 0) + Number(l.amount);
 

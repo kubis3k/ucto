@@ -38,25 +38,66 @@ async function createPosting({ unitId, userId, date, description, documentId = n
 async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }) {
   const summary = { merged_duplicates: 0, corrected_loans: 0, posted_loans: 0, posted_payments: 0, capital_posted: false };
 
-  // Nový řádek s external_ref sloučit do staršího kanonického řádku,
-  // který už může nést vazbu na doklad/zápis. Starší importy mohly mít
-  // external_ref také, proto je rozhodující nižší id a shodný bankovní otisk.
-  const duplicate = await store.get(
-    `SELECT n.id FROM bank_statement_line n WHERE n.accounting_unit_id=? AND n.external_ref IS NOT NULL
-       AND n.matched_document_id IS NULL AND n.posting_id IS NULL AND EXISTS (
-          SELECT 1 FROM bank_statement_line o WHERE o.accounting_unit_id=n.accounting_unit_id
-          AND o.id<n.id AND o.bank_account=n.bank_account
-          AND o.statement_date=n.statement_date AND o.amount=n.amount
-          AND COALESCE(o.variable_symbol,'')=COALESCE(n.variable_symbol,''))
-     ORDER BY n.id LIMIT 1`, [unitId]
+  // CSV s bankovním ID je autoritativní historie. Starší řádky bez ID
+  // nemažeme (audit), ale vyřadíme je z aktivní historie a případné vazby
+  // na doklad/zápis přeneseme na nejbližší skutečnou bankovní transakci.
+  const canonical = await store.all(
+    "SELECT * FROM bank_statement_line WHERE accounting_unit_id=? AND external_ref IS NOT NULL ORDER BY statement_date,id", [unitId]
   );
-  if (duplicate) {
-    await store.run("DELETE FROM bank_statement_line WHERE id=?", [duplicate.id]);
+  const legacy = canonical.length ? await store.get(
+    "SELECT * FROM bank_statement_line WHERE accounting_unit_id=? AND external_ref IS NULL AND superseded_by_bank_line_id IS NULL ORDER BY id LIMIT 1", [unitId]
+  ) : null;
+  if (legacy) {
+    const used = new Set((await store.all(
+      "SELECT superseded_by_bank_line_id AS id FROM bank_statement_line WHERE accounting_unit_id=? AND superseded_by_bank_line_id IS NOT NULL", [unitId]
+    )).map((r) => Number(r.id)));
+    const day = (s) => Date.parse(String(s).slice(0, 10) + "T00:00:00Z") / 86400000;
+    const candidates = canonical.filter((c) => !used.has(Number(c.id)) && Math.sign(Number(c.amount)) === Math.sign(Number(legacy.amount)))
+      .map((c) => ({ c, days: Math.abs(day(c.statement_date) - day(legacy.statement_date)), diff: Math.abs(Number(c.amount) - Number(legacy.amount)) }))
+      .filter((x) => x.days <= 5 && (x.diff <= 6 || x.diff / Math.max(1, Math.abs(Number(x.c.amount))) <= 0.02))
+      .sort((a, b) => (a.days * 100 + a.diff) - (b.days * 100 + b.diff));
+    const replacement = candidates[0]?.c;
+    if (replacement) {
+      await store.run(
+        `UPDATE bank_statement_line SET
+           matched_document_id=COALESCE(matched_document_id,?), posting_id=COALESCE(posting_id,?)
+         WHERE id=?`, [legacy.matched_document_id, legacy.posting_id, replacement.id]
+      );
+    }
+    // Pokud starý ruční/importní řádek nemá protějšek ve výpisu od banky,
+    // je rovněž vyřazen: výpis pokrývá celé fungování společnosti.
+    await store.run("UPDATE bank_statement_line SET superseded_by_bank_line_id=? WHERE id=?", [replacement?.id || legacy.id, legacy.id]);
     summary.merged_duplicates = 1;
     return { ...summary, completed: false };
   }
 
   const a221 = await account(unitId, "221"), a354 = await account(unitId, "354"), a365 = await account(unitId, "365");
+
+  // Obecná oprava starých bankovních zápisů: aktivní účet 221 roste na MD
+  // a klesá na D. Opravujeme pouze prokazatelný rozpor se znaménkem výpisu.
+  const inverted = await store.get(
+    `SELECT p.*,b.amount AS statement_amount FROM bank_statement_line b
+     JOIN posting p ON p.id=b.posting_id
+     JOIN posting_line pl ON pl.posting_id=p.id
+     JOIN chart_of_accounts ca ON ca.id=pl.account_id AND ca.account_number LIKE '221%'
+     WHERE b.accounting_unit_id=? AND b.superseded_by_bank_line_id IS NULL
+       AND ((b.amount>0 AND pl.side='D') OR (b.amount<0 AND pl.side='MD'))
+       AND NOT EXISTS (SELECT 1 FROM posting x WHERE x.accounting_unit_id=p.accounting_unit_id
+         AND (x.description=('OPRAVA MD/D banky — zrušení zápisu č. ' || p.posting_number)
+              OR x.description=('OPRAVA ZRUŠENÍ chybné zápůjčky k zápisu č. ' || p.posting_number)))
+     ORDER BY p.id LIMIT 1`, [unitId]
+  );
+  if (inverted) {
+    const oldLines = await store.all("SELECT account_id,side,amount FROM posting_line WHERE posting_id=?", [inverted.id]);
+    const flipped = oldLines.map((l) => ({ ...l, side: l.side === "MD" ? "D" : "MD" }));
+    const correctionDate = new Date().toISOString().slice(0, 10);
+    await createPosting({ unitId, userId, date: correctionDate,
+      description: `OPRAVA MD/D banky — zrušení zápisu č. ${inverted.posting_number}`, lines: flipped });
+    await createPosting({ unitId, userId, date: correctionDate,
+      description: `OPRAVA MD/D banky — správný zápis č. ${inverted.posting_number}`, lines: flipped });
+    summary.corrected_loans++;
+    return { ...summary, completed: false };
+  }
 
   // Opravit všechny historické zápisy, které současně použily 221 a
   // 354 pro příjem zápůjčky. Idempotence: již stornované přeskočit.
@@ -85,7 +126,7 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
   }
 
   // Nové, dosud nezaúčtované příjmy od potvrzených společníků.
-  const bankLines = await store.all("SELECT * FROM bank_statement_line WHERE accounting_unit_id=? ORDER BY statement_date,id", [unitId]);
+  const bankLines = await store.all("SELECT * FROM bank_statement_line WHERE accounting_unit_id=? AND superseded_by_bank_line_id IS NULL ORDER BY statement_date,id", [unitId]);
   for (const line of bankLines) {
     if (Number(line.amount) > 0 && !line.posting_id && !line.matched_document_id && SHAREHOLDER.test(line.counterparty_name || "")) {
       const id = await createPosting({ unitId, userId, date: line.statement_date,
@@ -101,7 +142,7 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
   const matched = await store.all(
     `SELECT b.*,d.doc_type,d.doc_number,d.id AS document_id FROM bank_statement_line b
      JOIN document d ON d.id=b.matched_document_id
-     WHERE b.accounting_unit_id=? AND d.doc_type IN ('faktura_vydana','faktura_prijata')`,
+     WHERE b.accounting_unit_id=? AND b.superseded_by_bank_line_id IS NULL AND d.doc_type IN ('faktura_vydana','faktura_prijata')`,
     [unitId]
   );
   const a311 = await account(unitId, "311"), a321 = await account(unitId, "321");

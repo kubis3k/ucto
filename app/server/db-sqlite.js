@@ -90,6 +90,7 @@ async function migrate() {
   // lib/bankMovements.js). Index musí vzniknout AŽ po ensureColumn, jinak
   // by na starších DB (bez sloupce) CREATE INDEX v schema.sql shodilo init.
   await ensureColumn("bank_statement_line", "external_ref", "TEXT");
+  await ensureColumn("bank_statement_line", "superseded_by_bank_line_id", "INTEGER");
   db.run(
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_statement_line_external_ref
      ON bank_statement_line(accounting_unit_id, external_ref) WHERE external_ref IS NOT NULL`
