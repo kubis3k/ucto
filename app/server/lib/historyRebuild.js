@@ -45,11 +45,6 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
       [unitId, fresh.id, fresh.bank_account, fresh.statement_date, fresh.amount]
     );
     if (!old) continue;
-    await store.run(
-      `UPDATE bank_statement_line SET external_ref=?, counterparty_name=COALESCE(counterparty_name,?),
-       variable_symbol=COALESCE(variable_symbol,?) WHERE id=?`,
-      [fresh.external_ref, fresh.counterparty_name, fresh.variable_symbol, old.id]
-    );
     if (!fresh.matched_document_id && !fresh.posting_id) {
       await store.run("DELETE FROM bank_statement_line WHERE id=?", [fresh.id]);
       summary.merged_duplicates++;
@@ -71,10 +66,9 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
   for (const p of wrongLoans) {
     const amountRow = await store.get("SELECT amount FROM posting_line WHERE posting_id=? AND account_id=?", [p.id, a221]);
     await stornoPosting(p.id, "Migrace zápůjčky: oprava 354/221 na 221/365", userId, unitId);
-    const correctedId = await createPosting({ unitId, userId, date: new Date().toISOString().slice(0, 10),
+    await createPosting({ unitId, userId, date: new Date().toISOString().slice(0, 10),
       description: `OPRAVA zápůjčky k zápisu č. ${p.posting_number}`,
       lines: [{ account_id: a221, side: "MD", amount: amountRow.amount }, { account_id: a365, side: "D", amount: amountRow.amount }] });
-    await store.run("UPDATE bank_statement_line SET posting_id=? WHERE accounting_unit_id=? AND posting_id=?", [correctedId, unitId, p.id]);
     summary.corrected_loans++;
   }
 
@@ -101,12 +95,18 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
   for (const line of matched) {
     if ((line.doc_type === "faktura_vydana" && Number(line.amount) <= 0) || (line.doc_type === "faktura_prijata" && Number(line.amount) >= 0)) continue;
     const amt = Math.abs(Number(line.amount));
+    const settlementExists = await store.get(
+      `SELECT p.id FROM posting p JOIN posting_line pl ON pl.posting_id=p.id AND pl.account_id=?
+       WHERE p.accounting_unit_id=? AND p.document_id=? AND p.posting_date=? AND ABS(pl.amount-?)<0.005
+         AND p.description LIKE 'Úhrada %' LIMIT 1`,
+      [a221, unitId, line.document_id, line.statement_date, amt]
+    );
+    if (settlementExists) continue;
     const lines = Number(line.amount) > 0
       ? [{ account_id: a221, side: "MD", amount: amt }, { account_id: a311, side: "D", amount: amt }]
       : [{ account_id: a321, side: "MD", amount: amt }, { account_id: a221, side: "D", amount: amt }];
     const id = await createPosting({ unitId, userId, date: line.statement_date, documentId: line.document_id,
       description: `Úhrada ${line.doc_number}`, lines });
-    await store.run("UPDATE bank_statement_line SET posting_id=? WHERE id=?", [id, line.id]);
     summary.posted_payments++;
   }
 
