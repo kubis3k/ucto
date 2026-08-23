@@ -67,9 +67,9 @@ async function autoMatchLine(lineId, unitId) {
     `SELECT * FROM document
      WHERE accounting_unit_id = ? AND status <> 'stornovany'
        AND ((COALESCE(CAST(? AS TEXT),'') <> '' AND variable_symbol = CAST(? AS TEXT))
-         OR ABS(total_amount - ABS(?)) < 0.01)
-       AND ((doc_type='faktura_vydana' AND ? > 0)
-         OR (doc_type='faktura_prijata' AND ? < 0))
+         OR ABS(total_amount - ABS(CAST(? AS DOUBLE PRECISION))) < 0.01)
+       AND ((doc_type='faktura_vydana' AND CAST(? AS DOUBLE PRECISION) > 0)
+         OR (doc_type='faktura_prijata' AND CAST(? AS DOUBLE PRECISION) < 0))
      ORDER BY CASE WHEN variable_symbol = CAST(? AS TEXT)
        AND COALESCE(CAST(? AS TEXT),'') <> '' THEN 0 ELSE 1 END, id`,
     [unitId, line.variable_symbol, line.variable_symbol, line.amount,
