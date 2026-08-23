@@ -106,19 +106,25 @@ router.post("/import", async (req, res) => {
       const inserted = [];
       let skipped = 0;
       for (const l of lines) {
+        if (l.external_ref) {
+          inserted.push(await createBankStatementLine({
+            unitId: accounting_unit_id,
+            bankAccount: bank_account,
+            date: l.statement_date,
+            amount: l.amount,
+            counterpartyName: l.counterparty_name,
+            variableSymbol: l.variable_symbol,
+            externalRef: l.external_ref,
+          }));
+          continue;
+        }
         // Starší importy external_ref neukládaly. Nový CSV už ID transakce
         // má, ale při prvním opakovaném importu musíme porovnat i historický
         // fingerprint, jinak se celá stará historie vloží podruhé.
-        const existing = l.external_ref
-          ? await store.get(
-              `SELECT id FROM bank_statement_line WHERE accounting_unit_id = ? AND
-                 (external_ref = ? OR (external_ref IS NULL AND bank_account = ? AND statement_date = ? AND amount = ?))`,
-              [accounting_unit_id, l.external_ref, bank_account, l.statement_date, l.amount]
-            )
-          : await store.get(
-              `SELECT id FROM bank_statement_line WHERE accounting_unit_id = ? AND bank_account = ? AND statement_date = ? AND amount = ?`,
-              [accounting_unit_id, bank_account, l.statement_date, l.amount]
-            );
+        const existing = await store.get(
+          `SELECT id FROM bank_statement_line WHERE accounting_unit_id = ? AND bank_account = ? AND statement_date = ? AND amount = ?`,
+          [accounting_unit_id, bank_account, l.statement_date, l.amount]
+        );
         if (existing) { skipped += 1; continue; }
         inserted.push(await createBankStatementLine({
           unitId: accounting_unit_id,
