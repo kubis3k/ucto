@@ -32,6 +32,31 @@ async function createPosting(unitId, userId, line, description, pairs, documentI
 async function cleanBankHistory({ unitId, userId }) {
   const summary = { superseded: 0, generated: 0 };
 
+  // Starší automatické párování mohlo vklad společníka spojit s fakturou
+  // jen kvůli shodné částce. Vazbu i takto vzniklý čistý posting zrušíme a
+  // řádek necháme znovu vytvořit bez document_id na účty 221/365.
+  const shareholderCandidates = await store.all(
+    `SELECT b.*,cp.posting_id AS clean_posting_id,p.document_id AS posting_document_id
+     FROM bank_statement_line b
+     LEFT JOIN bank_clean_posting cp ON cp.bank_line_id=b.id
+     LEFT JOIN posting p ON p.id=cp.posting_id
+     WHERE b.accounting_unit_id=? AND b.amount>0
+       AND (b.matched_document_id IS NOT NULL OR p.document_id IS NOT NULL)
+     ORDER BY b.id`, [unitId]
+  );
+  const wrongShareholder = shareholderCandidates.find((b) => SHAREHOLDER.test(b.counterparty_name || ""));
+  if (wrongShareholder) {
+    if (wrongShareholder.clean_posting_id) {
+      const already = await store.get("SELECT posting_id FROM posting_supersession WHERE posting_id=?", [wrongShareholder.clean_posting_id]);
+      if (!already) await store.run("INSERT INTO posting_supersession (posting_id,reason) VALUES (?,?)",
+        [wrongShareholder.clean_posting_id, "Vklad společníka byl chybně spárován s fakturou"]);
+      await store.run("DELETE FROM bank_clean_posting WHERE bank_line_id=?", [wrongShareholder.id]);
+    }
+    await store.run("DELETE FROM bank_clean_pending WHERE bank_line_id=?", [wrongShareholder.id]);
+    await store.run("UPDATE bank_statement_line SET matched_document_id=NULL,posting_id=NULL WHERE id=?", [wrongShareholder.id]);
+    return { ...summary, superseded: wrongShareholder.clean_posting_id ? 1 : 0, completed: false };
+  }
+
   // Samotný odchod na vlastní účet nedokládá, zda peníze dorazily do
   // pokladny, na jiný bankovní účet, nebo šlo o jiný účel. Starší migrace
   // jej automaticky dala na 261. Bez protistrany jej vrátíme uživateli k
@@ -117,10 +142,11 @@ async function cleanBankHistory({ unitId, userId }) {
 
   const a221 = await account(unitId, "221");
   const amount = Math.abs(Number(line.amount));
-  let other, description;
+  let other, description, documentId = line.document_id || null;
   if (Number(line.amount) > 0 && SHAREHOLDER.test(line.counterparty_name || "")) {
     other = await account(unitId, "365");
     description = `Zápůjčka od společníka — ${line.counterparty_name}`;
+    documentId = null;
   } else if (line.doc_type === "faktura_vydana" && Number(line.amount) > 0) {
     other = await account(unitId, "311"); description = `Úhrada ${line.doc_number}`;
   } else if (line.doc_type === "faktura_prijata" && Number(line.amount) < 0) {
@@ -137,7 +163,7 @@ async function cleanBankHistory({ unitId, userId }) {
   const pairs = Number(line.amount) > 0
     ? [{ account_id: a221, side: "MD", amount }, { account_id: other, side: "D", amount }]
     : [{ account_id: other, side: "MD", amount }, { account_id: a221, side: "D", amount }];
-  const postingId = await createPosting(unitId, userId, line, description, pairs, line.document_id || null);
+  const postingId = await createPosting(unitId, userId, line, description, pairs, documentId);
   await store.run("INSERT INTO bank_clean_posting (bank_line_id,posting_id) VALUES (?,?)", [line.id, postingId]);
   await store.run("UPDATE bank_statement_line SET posting_id=? WHERE id=?", [postingId, line.id]);
   summary.generated = 1;

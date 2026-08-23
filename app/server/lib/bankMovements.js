@@ -6,6 +6,7 @@
 // cest nesmí duplikovat INSERT logiku (viz flow-state.md INVARIANTY).
 // =====================================================================
 const store = require("../db");
+const SHAREHOLDER = /(?:štěpán\s+lísa|stepan\s+lisa|jakub\s+lučan|jakub\s+lucan|lučan\s+jakub|lucan\s+jakub|jan\s+leština|jan\s+lestina|leština\s+jan|lestina\s+jan)/i;
 
 // Vloží nový řádek bankovního výpisu. Idempotence přes (accounting_unit_id,
 // external_ref) — pokud řádek se stejným external_ref už existuje (e-mail
@@ -26,6 +27,9 @@ async function createBankStatementLine({ unitId, bankAccount, date, amount, coun
           counterparty_name=?,variable_symbol=?,superseded_by_bank_line_id=NULL WHERE id=?`,
         [bankAccount, date, amount, counterpartyName || null, variableSymbol || null, existing.id]
       );
+      if (Number(amount) > 0 && SHAREHOLDER.test(counterpartyName || "")) {
+        await store.run("UPDATE bank_statement_line SET matched_document_id=NULL WHERE id=?", [existing.id]);
+      }
       // Opakovaný import může doplnit obchodníka/zprávu, kterou starší
       // parser zahodil. Takový řádek musí jít znovu do klasifikace.
       await store.run("DELETE FROM bank_clean_pending WHERE bank_line_id = ?", [existing.id]);
@@ -62,6 +66,9 @@ async function autoMatchLine(lineId, unitId) {
     [lineId, unitId]
   );
   if (!line || line.matched_document_id) return null;
+  // Vklad/zápůjčka společníka má přednost před shodou částky či VS s
+  // fakturou. Jde o MD 221 / D 365, nikoli úhradu dodavatelského závazku.
+  if (Number(line.amount) > 0 && SHAREHOLDER.test(line.counterparty_name || "")) return null;
 
   const candidates = await store.all(
     `SELECT * FROM document
