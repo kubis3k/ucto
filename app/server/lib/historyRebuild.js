@@ -1,0 +1,127 @@
+const store = require("../db");
+const { nextPostingNumber, writeAuditLog, stornoPosting, assertMonthOpen } = require("./core");
+const { resolvePeriodForDate } = require("./recurring");
+
+const SHAREHOLDER = /(?:štěpán\s+lísa|jakub\s+lučan|lučan\s+jakub|jan\s+leština|leština\s+jan)/i;
+
+async function account(unitId, number) {
+  const row = await store.get("SELECT id FROM chart_of_accounts WHERE accounting_unit_id=? AND account_number=?", [unitId, number]);
+  if (!row) throw new Error(`Účet ${number} není v účtovém rozvrhu.`);
+  return row.id;
+}
+
+async function createPosting({ unitId, userId, date, description, documentId = null, lines }) {
+  const period = await resolvePeriodForDate(unitId, date);
+  if (!period) throw new Error(`Pro datum ${date} neexistuje účetní období.`);
+  await assertMonthOpen(unitId, date);
+  const number = await nextPostingNumber(unitId);
+  await store.run(
+    `INSERT INTO posting (accounting_unit_id,period_id,posting_number,document_id,posting_date,description,created_by)
+     VALUES (?,?,?,?,?,?,?)`,
+    [unitId, period.id, number, documentId, date, description, userId]
+  );
+  const id = (await store.get("SELECT last_insert_rowid() AS id")).id;
+  for (const line of lines) await store.run(
+    "INSERT INTO posting_line (posting_id,account_id,side,amount) VALUES (?,?,?,?)",
+    [id, line.account_id, line.side, line.amount]
+  );
+  await writeAuditLog({ unitId, userId, action: "POST", table: "posting", entityId: id, after: { migration: "bank-history-v2", description } });
+  return id;
+}
+
+async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }) {
+  const summary = { merged_duplicates: 0, corrected_loans: 0, posted_loans: 0, posted_payments: 0, capital_posted: false };
+
+  // Nový řádek s external_ref sloučit do staršího kanonického řádku,
+  // který už může nést vazbu na doklad/zápis.
+  const imported = await store.all(
+    "SELECT * FROM bank_statement_line WHERE accounting_unit_id=? AND external_ref IS NOT NULL ORDER BY id DESC",
+    [unitId]
+  );
+  for (const fresh of imported) {
+    const old = await store.get(
+      `SELECT * FROM bank_statement_line WHERE accounting_unit_id=? AND id<>? AND external_ref IS NULL
+       AND bank_account=? AND statement_date=? AND amount=? ORDER BY id LIMIT 1`,
+      [unitId, fresh.id, fresh.bank_account, fresh.statement_date, fresh.amount]
+    );
+    if (!old) continue;
+    await store.run(
+      `UPDATE bank_statement_line SET external_ref=?, counterparty_name=COALESCE(counterparty_name,?),
+       variable_symbol=COALESCE(variable_symbol,?) WHERE id=?`,
+      [fresh.external_ref, fresh.counterparty_name, fresh.variable_symbol, old.id]
+    );
+    if (!fresh.matched_document_id && !fresh.posting_id) {
+      await store.run("DELETE FROM bank_statement_line WHERE id=?", [fresh.id]);
+      summary.merged_duplicates++;
+    }
+  }
+
+  const a221 = await account(unitId, "221"), a354 = await account(unitId, "354"), a365 = await account(unitId, "365");
+
+  // Opravit všechny historické zápisy, které současně použily 221 a
+  // 354 pro příjem zápůjčky. Idempotence: již stornované přeskočit.
+  const wrongLoans = await store.all(
+    `SELECT DISTINCT p.* FROM posting p
+     JOIN posting_line b ON b.posting_id=p.id AND b.account_id=? AND b.side='D'
+     JOIN posting_line s ON s.posting_id=p.id AND s.account_id=? AND s.side='MD'
+     WHERE p.accounting_unit_id=? AND p.storno_of_posting_id IS NULL
+       AND NOT EXISTS (SELECT 1 FROM posting x WHERE x.storno_of_posting_id=p.id)`,
+    [a221, a354, unitId]
+  );
+  for (const p of wrongLoans) {
+    const amountRow = await store.get("SELECT amount FROM posting_line WHERE posting_id=? AND account_id=?", [p.id, a221]);
+    await stornoPosting(p.id, "Migrace zápůjčky: oprava 354/221 na 221/365", userId, unitId);
+    const correctedId = await createPosting({ unitId, userId, date: new Date().toISOString().slice(0, 10),
+      description: `OPRAVA zápůjčky k zápisu č. ${p.posting_number}`,
+      lines: [{ account_id: a221, side: "MD", amount: amountRow.amount }, { account_id: a365, side: "D", amount: amountRow.amount }] });
+    await store.run("UPDATE bank_statement_line SET posting_id=? WHERE accounting_unit_id=? AND posting_id=?", [correctedId, unitId, p.id]);
+    summary.corrected_loans++;
+  }
+
+  // Nové, dosud nezaúčtované příjmy od potvrzených společníků.
+  const bankLines = await store.all("SELECT * FROM bank_statement_line WHERE accounting_unit_id=? ORDER BY statement_date,id", [unitId]);
+  for (const line of bankLines) {
+    if (Number(line.amount) > 0 && !line.posting_id && !line.matched_document_id && SHAREHOLDER.test(line.counterparty_name || "")) {
+      const id = await createPosting({ unitId, userId, date: line.statement_date,
+        description: `Zápůjčka od společníka — ${line.counterparty_name}`,
+        lines: [{ account_id: a221, side: "MD", amount: Number(line.amount) }, { account_id: a365, side: "D", amount: Number(line.amount) }] });
+      await store.run("UPDATE bank_statement_line SET posting_id=? WHERE id=?", [id, line.id]);
+      summary.posted_loans++;
+    }
+  }
+
+  // Zachované vazby na faktury převést na skutečné zápisy úhrad.
+  const matched = await store.all(
+    `SELECT b.*,d.doc_type,d.doc_number,d.id AS document_id FROM bank_statement_line b
+     JOIN document d ON d.id=b.matched_document_id
+     WHERE b.accounting_unit_id=? AND b.posting_id IS NULL AND d.doc_type IN ('faktura_vydana','faktura_prijata')`,
+    [unitId]
+  );
+  const a311 = await account(unitId, "311"), a321 = await account(unitId, "321");
+  for (const line of matched) {
+    if ((line.doc_type === "faktura_vydana" && Number(line.amount) <= 0) || (line.doc_type === "faktura_prijata" && Number(line.amount) >= 0)) continue;
+    const amt = Math.abs(Number(line.amount));
+    const lines = Number(line.amount) > 0
+      ? [{ account_id: a221, side: "MD", amount: amt }, { account_id: a311, side: "D", amount: amt }]
+      : [{ account_id: a321, side: "MD", amount: amt }, { account_id: a221, side: "D", amount: amt }];
+    const id = await createPosting({ unitId, userId, date: line.statement_date, documentId: line.document_id,
+      description: `Úhrada ${line.doc_number}`, lines });
+    await store.run("UPDATE bank_statement_line SET posting_id=? WHERE id=?", [id, line.id]);
+    summary.posted_payments++;
+  }
+
+  const a353 = await account(unitId, "353"), a411 = await account(unitId, "411");
+  const capitalExists = await store.get(
+    `SELECT p.id FROM posting p JOIN posting_line l ON l.posting_id=p.id
+     WHERE p.accounting_unit_id=? AND l.account_id=? AND l.side='D' AND ABS(l.amount-?)<0.005 LIMIT 1`,
+    [unitId, a411, capitalAmount]
+  );
+  if (!capitalExists) {
+    await createPosting({ unitId, userId, date: capitalDate, description: "Úpis nesplaceného základního kapitálu",
+      lines: [{ account_id: a353, side: "MD", amount: capitalAmount }, { account_id: a411, side: "D", amount: capitalAmount }] });
+    summary.capital_posted = true;
+  }
+  return summary;
+}
+
+module.exports = { rebuildBankHistory };

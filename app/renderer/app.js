@@ -2278,6 +2278,7 @@ async function renderBank() {
 
   document.getElementById("topbarActions").innerHTML = `
     <button class="secondary" data-action="import-bank">Importovat výpis (CSV/XML)</button>
+    ${STATE.user.role === "admin" ? `<button class="secondary" data-action="rebuild-bank-history">Převést historii na novou verzi</button>` : ""}
     <button data-action="new-bank-line">+ Zadat pohyb</button>`;
   const unmatched = lines.filter((l) => !l.matched_document_id && !l.posting_id).length;
 
@@ -3483,6 +3484,12 @@ document.addEventListener("click", async (e) => {
       case "edit-bank-line": editBankLineModal(id); break;
       case "delete-bank-line": await deleteBankLine(id); break;
       case "import-bank": bankImportModal(); break;
+      case "rebuild-bank-history": {
+        const result = await api("POST", "/bank/rebuild-history", {});
+        toast(`Historie převedena: ${result.merged_duplicates} duplicit sloučeno, ${result.corrected_loans + result.posted_loans} zápůjček opraveno, ${result.posted_payments} úhrad doplněno.`);
+        await renderBank();
+        break;
+      }
       case "csv-parse": csvParseRows(); break;
       case "confirm-import": await confirmBankImport(); break;
       case "suggest-matches": await suggestMatches(); break;

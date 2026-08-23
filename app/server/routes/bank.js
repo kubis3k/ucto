@@ -5,6 +5,7 @@ const { nextPostingNumber, writeAuditLog, assertPeriodOpen, assertMonthOpen } = 
 const { createBankStatementLine } = require("../lib/bankMovements");
 const { resolvePeriodForDate } = require("../lib/recurring");
 const { getRate } = require("../lib/cnbExchangeRate");
+const { rebuildBankHistory } = require("../lib/historyRebuild");
 const router = express.Router();
 
 // Vestavěný slovník klíčových slov — výchozí návrh kategorie, dokud si
@@ -26,6 +27,22 @@ router.get("/", async (req, res) => {
       [req.query.unit]
     ));
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Jednorázová idempotentní migrace staré bankovní historie na nový
+// model. Jen admin; účetní zápisy opravuje stornem, nemaže je.
+router.post("/rebuild-history", async (req, res) => {
+  if (req.user.role !== "admin") return res.status(403).json({ error: "Migraci historie smí spustit pouze administrátor." });
+  try {
+    const result = await store.transaction(() => rebuildBankHistory({
+      unitId: req.user.accountingUnitId,
+      userId: req.user.id,
+      capitalAmount: 30,
+      capitalDate: "2026-04-20",
+    }));
+    store.persist();
+    res.json(result);
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 // PATCH /api/bank/:id — oprava řádku výpisu (např. špatně naparsovaná/naimportovaná
