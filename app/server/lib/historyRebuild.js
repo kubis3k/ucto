@@ -37,13 +37,16 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
   const summary = { merged_duplicates: 0, corrected_loans: 0, posted_loans: 0, posted_payments: 0, capital_posted: false };
 
   // Nový řádek s external_ref sloučit do staršího kanonického řádku,
-  // který už může nést vazbu na doklad/zápis.
+  // který už může nést vazbu na doklad/zápis. Starší importy mohly mít
+  // external_ref také, proto je rozhodující nižší id a shodný bankovní otisk.
   const duplicate = await store.get(
     `SELECT n.id FROM bank_statement_line n WHERE n.accounting_unit_id=? AND n.external_ref IS NOT NULL
        AND n.matched_document_id IS NULL AND n.posting_id IS NULL AND EXISTS (
          SELECT 1 FROM bank_statement_line o WHERE o.accounting_unit_id=n.accounting_unit_id
-          AND o.id<>n.id AND o.external_ref IS NULL AND o.bank_account=n.bank_account
-          AND o.statement_date=n.statement_date AND o.amount=n.amount)
+          AND o.id<n.id AND o.bank_account=n.bank_account
+          AND o.statement_date=n.statement_date AND o.amount=n.amount
+          AND COALESCE(o.counterparty_account,'')=COALESCE(n.counterparty_account,'')
+          AND COALESCE(o.variable_symbol,'')=COALESCE(n.variable_symbol,''))
      ORDER BY n.id LIMIT 1`, [unitId]
   );
   if (duplicate) {
@@ -57,24 +60,25 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
   // Opravit všechny historické zápisy, které současně použily 221 a
   // 354 pro příjem zápůjčky. Idempotence: již stornované přeskočit.
   const wrongLoans = await store.all(
-    `SELECT DISTINCT p.* FROM posting p
-     JOIN posting_line b ON b.posting_id=p.id AND b.account_id=? AND b.side='D'
-     JOIN posting_line s ON s.posting_id=p.id AND s.account_id=? AND s.side='MD'
+    `SELECT DISTINCT p.*,b.amount AS bank_amount FROM posting p
+     JOIN posting_line b ON b.posting_id=p.id AND b.side='D'
+     JOIN chart_of_accounts ba ON ba.id=b.account_id AND ba.account_number LIKE '221%'
+     JOIN posting_line s ON s.posting_id=p.id AND s.side='MD'
+     JOIN chart_of_accounts sa ON sa.id=s.account_id AND sa.account_number LIKE '354%'
      WHERE p.accounting_unit_id=? AND p.storno_of_posting_id IS NULL
        AND NOT EXISTS (SELECT 1 FROM posting x WHERE x.storno_of_posting_id=p.id)
        AND NOT EXISTS (SELECT 1 FROM posting x WHERE x.accounting_unit_id=p.accounting_unit_id
          AND x.description = ('OPRAVA ZRUŠENÍ chybné zápůjčky k zápisu č. ' || p.posting_number))`,
-    [a221, a354, unitId]
+    [unitId]
   );
   for (const p of wrongLoans) {
-    const amountRow = await store.get("SELECT amount FROM posting_line WHERE posting_id=? AND account_id=?", [p.id, a221]);
     const correctionDate = new Date().toISOString().slice(0, 10);
     await createPosting({ unitId, userId, date: correctionDate,
       description: `OPRAVA ZRUŠENÍ chybné zápůjčky k zápisu č. ${p.posting_number}`,
-      lines: [{ account_id: a221, side: "MD", amount: amountRow.amount }, { account_id: a354, side: "D", amount: amountRow.amount }] });
+      lines: [{ account_id: a221, side: "MD", amount: p.bank_amount }, { account_id: a354, side: "D", amount: p.bank_amount }] });
     await createPosting({ unitId, userId, date: correctionDate,
       description: `OPRAVA SPRÁVNÉ zápůjčky k zápisu č. ${p.posting_number}`,
-      lines: [{ account_id: a221, side: "MD", amount: amountRow.amount }, { account_id: a365, side: "D", amount: amountRow.amount }] });
+      lines: [{ account_id: a221, side: "MD", amount: p.bank_amount }, { account_id: a365, side: "D", amount: p.bank_amount }] });
     summary.corrected_loans++;
     return { ...summary, completed: false };
   }
@@ -96,7 +100,7 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
   const matched = await store.all(
     `SELECT b.*,d.doc_type,d.doc_number,d.id AS document_id FROM bank_statement_line b
      JOIN document d ON d.id=b.matched_document_id
-     WHERE b.accounting_unit_id=? AND b.posting_id IS NULL AND d.doc_type IN ('faktura_vydana','faktura_prijata')`,
+     WHERE b.accounting_unit_id=? AND d.doc_type IN ('faktura_vydana','faktura_prijata')`,
     [unitId]
   );
   const a311 = await account(unitId, "311"), a321 = await account(unitId, "321");
