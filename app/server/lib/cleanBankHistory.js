@@ -32,6 +32,48 @@ async function createPosting(unitId, userId, line, description, pairs, documentI
 async function cleanBankHistory({ unitId, userId }) {
   const summary = { superseded: 0, generated: 0 };
 
+  // Pokud už existuje zaúčtovaná přijatá faktura (MD náklad / D 321),
+  // bankovní výdej nesmí vytvořit druhý náklad. U jednoznačné shody částky
+  // nahradíme přímý bankovní náklad úhradou MD 321 / D 221.
+  const directExpenses = await store.all(
+    `SELECT cp.bank_line_id,cp.posting_id,b.amount,b.statement_date
+     FROM bank_clean_posting cp
+     JOIN bank_statement_line b ON b.id=cp.bank_line_id
+     JOIN posting p ON p.id=cp.posting_id
+     WHERE b.accounting_unit_id=? AND b.amount<0 AND b.matched_document_id IS NULL
+       AND NOT EXISTS (SELECT 1 FROM posting_supersession ps WHERE ps.posting_id=p.id)
+       AND EXISTS (SELECT 1 FROM posting_line pl JOIN chart_of_accounts ca ON ca.id=pl.account_id
+                   WHERE pl.posting_id=p.id AND ca.account_number LIKE '518%')
+     ORDER BY b.id`, [unitId]
+  );
+  let directExpense = null, matchedInvoiceId = null;
+  for (const candidateExpense of directExpenses) {
+    const candidates = await store.all(
+      `SELECT d.id FROM document d
+       WHERE d.accounting_unit_id=? AND d.doc_type='faktura_prijata'
+         AND d.status='zauctovany' AND d.currency='CZK'
+         AND ABS(d.total_amount-ABS(?)) < 0.01
+         AND COALESCE((SELECT SUM(ABS(b2.amount)) FROM bank_statement_line b2
+                       WHERE b2.matched_document_id=d.id
+                         AND b2.superseded_by_bank_line_id IS NULL),0) < d.total_amount-0.01
+       ORDER BY d.id`, [unitId, candidateExpense.amount]
+    );
+    if (candidates.length === 1) {
+      directExpense = candidateExpense;
+      matchedInvoiceId = candidates[0].id;
+      break;
+    }
+  }
+  if (directExpense) {
+      await store.run("INSERT INTO posting_supersession (posting_id,reason) VALUES (?,?)",
+        [directExpense.posting_id, "Nahrazeno úhradou již zaúčtované přijaté faktury"]);
+      await store.run("DELETE FROM bank_clean_posting WHERE bank_line_id=?", [directExpense.bank_line_id]);
+      await store.run("DELETE FROM bank_clean_pending WHERE bank_line_id=?", [directExpense.bank_line_id]);
+      await store.run("UPDATE bank_statement_line SET matched_document_id=?,posting_id=NULL WHERE id=?",
+        [matchedInvoiceId, directExpense.bank_line_id]);
+      return { ...summary, superseded: 1, completed: false };
+  }
+
   // Starší čistá historie dávala všechny on-line platby přímo na syntetický
   // 518. Převedeme je na stabilní analytiky: SaaS, marketing, telekomunikace.
   const oldService = await store.get(
