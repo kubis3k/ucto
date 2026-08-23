@@ -2,7 +2,7 @@ const store = require("../db");
 const { nextPostingNumber, writeAuditLog, assertMonthOpen } = require("./core");
 const { resolvePeriodForDate } = require("./recurring");
 
-const SHAREHOLDER = /(?:štěpán\s+lísa|jakub\s+lučan|lučan\s+jakub|jan\s+leština|leština\s+jan)/i;
+const SHAREHOLDER = /(?:štěpán\s+lísa|stepan\s+lisa|jakub\s+lučan|jakub\s+lucan|lučan\s+jakub|lucan\s+jakub|jan\s+leština|jan\s+lestina|leština\s+jan|lestina\s+jan)/i;
 
 async function account(unitId, number) {
   const row = await store.get("SELECT id FROM chart_of_accounts WHERE accounting_unit_id=? AND account_number=?", [unitId, number]);
@@ -248,6 +248,34 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
     await createPosting({ unitId, userId, date: new Date().toISOString().slice(0, 10),
       description: `Vyrovnání 221 dle úplného bankovního výpisu (cílový stav ${bankTotal.toFixed(2)} Kč)`, lines });
     summary.posted_payments++;
+    return { ...summary, completed: false };
+  }
+
+  // Zápůjčky nebyly dle potvrzení účetní jednotky splaceny. Cílové saldo
+  // 365 je proto přesný součet kladných příjmů od potvrzených společníků.
+  const shareholderReceipts = (await store.all(
+    `SELECT amount,counterparty_name FROM bank_statement_line WHERE accounting_unit_id=?
+       AND superseded_by_bank_line_id IS NULL AND amount>0`, [unitId]
+  )).filter((r) => SHAREHOLDER.test(r.counterparty_name || ""))
+    .reduce((sum, r) => sum + Number(r.amount), 0);
+  const liabilityRow = await store.get(
+    `SELECT COALESCE(SUM(CASE WHEN pl.side='D' THEN pl.amount ELSE -pl.amount END),0) AS total
+     FROM posting_line pl JOIN posting p ON p.id=pl.posting_id
+     JOIN chart_of_accounts ca ON ca.id=pl.account_id
+     WHERE p.accounting_unit_id=? AND ca.account_number LIKE '365%'`, [unitId]
+  );
+  const target365 = Math.round(shareholderReceipts * 100) / 100;
+  const ledger365 = Math.round(Number(liabilityRow.total) * 100) / 100;
+  const diff365 = Math.round((target365 - ledger365) * 100) / 100;
+  if (Math.abs(diff365) >= 0.01) {
+    const a325 = await account(unitId, "325");
+    const amount = Math.abs(diff365);
+    const lines = diff365 > 0
+      ? [{ account_id: a325, side: "MD", amount }, { account_id: a365, side: "D", amount }]
+      : [{ account_id: a365, side: "MD", amount }, { account_id: a325, side: "D", amount }];
+    await createPosting({ unitId, userId, date: new Date().toISOString().slice(0, 10),
+      description: `Vyrovnání 365 dle nesplacených zápůjček (cílový stav ${target365.toFixed(2)} Kč)`, lines });
+    summary.corrected_loans++;
     return { ...summary, completed: false };
   }
 
