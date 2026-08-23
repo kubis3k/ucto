@@ -197,6 +197,18 @@ router.post("/:id/match", async (req, res) => {
     if (!line) return res.status(404).json({ error: "Řádek výpisu nenalezen" });
     const doc = await store.get("SELECT * FROM document WHERE id = ? AND accounting_unit_id = ?", [document_id, unitId]);
     if (!doc) return res.status(404).json({ error: "Doklad nenalezen" });
+    if (line.posting_id) return res.status(400).json({ error: "Bankovní pohyb je již zaúčtovaný." });
+
+    // Banka je aktivní účet: příjem = MD 221, výdej = D 221.
+    // Vydaná faktura se smí párovat jen s příjmem (221/311), přijatá
+    // jen s výdejem (321/221). Dříve match pouze uložil vazbu na doklad
+    // a nevytvořil žádný zápis úhrady, takže hlavní kniha banku ignorovala.
+    if (doc.doc_type === "faktura_vydana" && Number(line.amount) <= 0) {
+      return res.status(400).json({ error: "Vydanou fakturu lze spárovat pouze s příchozí platbou." });
+    }
+    if (doc.doc_type === "faktura_prijata" && Number(line.amount) >= 0) {
+      return res.status(400).json({ error: "Přijatou fakturu lze spárovat pouze s odchozí platbou." });
+    }
 
     const isForeign = !!(doc.currency && doc.currency !== "CZK");
     let czkPay = doc.total_amount;
@@ -240,7 +252,47 @@ router.post("/:id/match", async (req, res) => {
     await assertMonthOpen(unitId, line.statement_date);
 
     const result = await store.transaction(async () => {
-      await store.run("UPDATE bank_statement_line SET matched_document_id = ? WHERE id = ? AND accounting_unit_id = ?", [document_id, req.params.id, unitId]);
+      const bankAccount = await store.get(
+        "SELECT id FROM chart_of_accounts WHERE accounting_unit_id = ? AND account_number = ?",
+        [unitId, line.bank_account]
+      );
+      if (!bankAccount) throw new Error(`Účet ${line.bank_account} nenalezen v účtovém rozvrhu.`);
+      const settlementNumber = doc.doc_type === "faktura_vydana" ? "311" : "321";
+      const settlementAccount = await store.get(
+        "SELECT id FROM chart_of_accounts WHERE accounting_unit_id = ? AND account_number = ?",
+        [unitId, settlementNumber]
+      );
+      if (!settlementAccount) throw new Error(`Účet ${settlementNumber} nenalezen v účtovém rozvrhu.`);
+
+      const paymentPeriod = await resolvePeriodForDate(unitId, line.statement_date);
+      if (!paymentPeriod) throw new Error(`Pro datum ${line.statement_date} neexistuje účetní období.`);
+      await assertPeriodOpen(paymentPeriod.id);
+      const paidAmount = Math.abs(Number(line.amount));
+      const postingNumber = await nextPostingNumber(unitId);
+      await store.run(
+        `INSERT INTO posting (accounting_unit_id, period_id, posting_number, document_id, posting_date, description, created_by)
+         VALUES (?,?,?,?,?,?,?)`,
+        [unitId, paymentPeriod.id, postingNumber, doc.id, line.statement_date,
+         `Úhrada ${doc.doc_number} — ${line.counterparty_name || line.bank_account}`, created_by || req.user.id]
+      );
+      const settlementPostingId = (await store.get("SELECT last_insert_rowid() AS id")).id;
+      const settlementLines = Number(line.amount) > 0
+        ? [[bankAccount.id, "MD"], [settlementAccount.id, "D"]]
+        : [[settlementAccount.id, "MD"], [bankAccount.id, "D"]];
+      for (const [accountId, side] of settlementLines) {
+        await store.run(
+          "INSERT INTO posting_line (posting_id, account_id, side, amount) VALUES (?,?,?,?)",
+          [settlementPostingId, accountId, side, paidAmount]
+        );
+      }
+      await store.run(
+        "UPDATE bank_statement_line SET matched_document_id = ?, posting_id = ? WHERE id = ? AND accounting_unit_id = ?",
+        [document_id, settlementPostingId, req.params.id, unitId]
+      );
+      await writeAuditLog({
+        unitId, userId: created_by || req.user.id, action: "POST", table: "bank_statement_line", entityId: line.id,
+        after: { matched_document_id: document_id, posting_id: settlementPostingId },
+      });
 
       let fxPosting = null;
       let marginPosting = null;
@@ -258,6 +310,7 @@ router.post("/:id/match", async (req, res) => {
       }
       return {
         line: await store.get("SELECT * FROM bank_statement_line WHERE id = ?", [req.params.id]),
+        settlement_posting_id: settlementPostingId,
         fx_posting: fxPosting,
         margin_posting: marginPosting,
         already_matched: alreadyMatched,

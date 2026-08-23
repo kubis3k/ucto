@@ -41,6 +41,7 @@ const ACCOUNTS = [
   ["343", "DPH (aktivuje se s registrací)", 3, "rozvahovy_pasivni", null],
   ["345", "Ostatní daně a poplatky", 3, "rozvahovy_pasivni", null],
   ["354", "Pohledávky za společníky", 3, "rozvahovy_aktivni", null],
+  ["353", "Pohledávky za upsaný vlastní kapitál", 3, "rozvahovy_aktivni", null],
   ["365", "Ostatní závazky ke společníkům", 3, "rozvahovy_pasivni", null],
   ["366", "Závazky ke společníkům při rozdělování zisku", 3, "rozvahovy_pasivni", null],
   ["379", "Jiné závazky", 3, "rozvahovy_pasivni", null],

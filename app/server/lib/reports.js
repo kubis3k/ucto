@@ -79,13 +79,29 @@ async function rozvaha(unitId, asOfDate) {
       zustatek: await accountNaturalBalance(a.id, asOfDate),
     });
   }
+
+  // Záporný zůstatek banky (kontokorent) není záporné aktivum.
+  // Pro rozvahu se vykáže jako krátkodobý bankovní závazek. Detail
+  // zachovává auditovatelnou syntetickou položku; účetní zápisy se nemění.
+  const overdrafts = [];
+  for (const d of detail) {
+    if (d.account_number.startsWith("221") && d.zustatek < 0) {
+      overdrafts.push({
+        strana: "PASIVA", account_number: `${d.account_number}-KONTOKORENT`,
+        account_name: `Kontokorent / záporný zůstatek ${d.account_name}`, zustatek: Math.abs(d.zustatek),
+        report_row: "C.II.p",
+      });
+      d.zustatek = 0;
+    }
+  }
+  detail.push(...overdrafts);
   let aktiva_celkem = detail.filter((p) => p.strana === "AKTIVA").reduce((s, p) => s + p.zustatek, 0);
   let pasiva_celkem = detail.filter((p) => p.strana === "PASIVA").reduce((s, p) => s + p.zustatek, 0);
 
   // Agregace do oficiálních řádků výkazu.
   const soucty = {};
   for (const d of detail) {
-    const rowCode = resolveRow(d.account_number, ACCOUNT_TO_ROZVAHA_ROW) || (d.strana === "AKTIVA" ? "AKTIVA.X" : "PASIVA.X");
+    const rowCode = d.report_row || resolveRow(d.account_number, ACCOUNT_TO_ROZVAHA_ROW) || (d.strana === "AKTIVA" ? "AKTIVA.X" : "PASIVA.X");
     soucty[rowCode] = (soucty[rowCode] || 0) + d.zustatek;
   }
 

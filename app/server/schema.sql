@@ -708,3 +708,13 @@ WHEN EXISTS (
 BEGIN
     SELECT RAISE(ABORT, 'Měsíc je uzamčen měsíční uzávěrkou — zápis s tímto datem není možný.');
 END;
+
+-- Pokladna je fyzická hotovost a nesmí mít kreditní (záporný) zůstatek.
+CREATE TRIGGER IF NOT EXISTS trg_cash_nonnegative
+AFTER INSERT ON posting_line
+WHEN (SELECT account_number FROM chart_of_accounts WHERE id = NEW.account_id) LIKE '211%'
+ AND (SELECT COALESCE(SUM(CASE WHEN pl.side='MD' THEN pl.amount ELSE -pl.amount END),0)
+      FROM posting_line pl WHERE pl.account_id = NEW.account_id) < -0.005
+BEGIN
+    SELECT RAISE(ABORT, 'Pokladna (211) nemůže mít záporný zůstatek. Nejprve zaúčtujte příjem hotovosti.');
+END;

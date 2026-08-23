@@ -69,6 +69,29 @@ async function apiUpload(path, formData) {
   return res.json();
 }
 
+async function downloadProtected(path, filename) {
+  const headers = {};
+  const token = authToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${API}${path}`, { headers });
+  if (!res.ok) {
+    let message = res.statusText;
+    try { message = (await res.json()).error || message; } catch (_) {}
+    throw new Error(message);
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+function exportButtons(kind, params = "") {
+  return ["pdf", "csv", "xlsx"].map((format) => {
+    const separator = params ? "&" : "?";
+    return `<button class="secondary small" data-action="download-export" data-path="/export/${kind}${params}${separator}format=${format}" data-file="${kind}.${format}">${format.toUpperCase()}</button>`;
+  }).join("");
+}
+
 function toast(message, type = "success") {
   const el = document.getElementById("toast");
   el.textContent = message;
@@ -82,7 +105,12 @@ function toast(message, type = "success") {
 // ---------------------------------------------------------------------
 const fmtMoney = (v) => (v === null || v === undefined ? "—" :
   Number(v).toLocaleString("cs-CZ", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " Kč");
-const fmtDate = (v) => (v ? new Date(v).toLocaleDateString("cs-CZ") : "—");
+const fmtDate = (v) => {
+  if (!v) return "—";
+  const dateOnly = String(v).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) return `${Number(dateOnly[3])}. ${Number(dateOnly[2])}. ${dateOnly[1]}`;
+  return new Date(v).toLocaleDateString("cs-CZ");
+};
 const fmtDateTime = (v) => (v ? new Date(v).toLocaleString("cs-CZ") : "—");
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -1882,7 +1910,7 @@ async function runRecurringNow(id) {
 async function renderJournal() {
   const unit = STATE.unit.id;
   const postings = await api("GET", `/postings?unit=${unit}`);
-  document.getElementById("topbarActions").innerHTML = `<button data-action="new-posting">+ Ruční zápis</button>`;
+  document.getElementById("topbarActions").innerHTML = `${exportButtons("ucetni-denik", `?unit=${unit}`)}<button data-action="new-posting">+ Ruční zápis</button>`;
   document.getElementById("view").innerHTML = `
     <div class="panel">
       <p class="text-dim" style="margin-top:0">Chronologický, needitovatelný seznam všech účetních zápisů (§ 33a zákona o účetnictví). Opravu lze provést pouze stornovacím zápisem.</p>
@@ -1991,8 +2019,7 @@ async function renderLedger() {
     grouped[r.account_number].rows.push(r);
   }
 
-  document.getElementById("topbarActions").innerHTML = `
-    <a class="btn secondary" style="text-decoration:none;display:inline-block" href="${API}/export/hlavni-kniha?unit=${unit}&asOf=${asOf}" target="_blank">Export CSV</a>`;
+  document.getElementById("topbarActions").innerHTML = exportButtons("hlavni-kniha", `?unit=${unit}&asOf=${asOf}`);
 
   document.getElementById("view").innerHTML = `
     <div class="panel">
@@ -2505,17 +2532,37 @@ function parseCamt053(xmlText) {
 // --- CSV s mapováním sloupců ---
 function parseCsvWithMapping(text) {
   const delimiter = (text.match(/;/g) || []).length >= (text.match(/,/g) || []).length ? ";" : ",";
-  const rows = text.split(/\r?\n/).filter((r) => r.trim()).map((r) => r.split(delimiter).map((c) => c.replace(/^"|"$/g, "").trim()));
+  // RFC 4180 parser: bankovní CSV obsahuje oddělovače i uvozovky uvnitř
+  // zpráv. Prosté split(';') posouvalo sloupce a mohlo změnit částku,
+  // protistranu i ID transakce.
+  const rows = []; let row = [], cell = "", quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '"') {
+      if (quoted && text[i + 1] === '"') { cell += '"'; i++; }
+      else quoted = !quoted;
+    } else if (ch === delimiter && !quoted) { row.push(cell.trim()); cell = ""; }
+    else if ((ch === "\n" || ch === "\r") && !quoted) {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      row.push(cell.trim()); cell = "";
+      if (row.some((v) => v !== "")) rows.push(row);
+      row = [];
+    } else cell += ch;
+  }
+  row.push(cell.trim()); if (row.some((v) => v !== "")) rows.push(row);
   if (rows.length < 2) throw new Error("CSV nemá dostatek řádků.");
-  const header = rows[0];
+  const header = rows[0].map((h) => h.replace(/^\uFEFF/, ""));
   const guess = (patterns) => header.findIndex((h) => patterns.some((p) => h.toLowerCase().includes(p)));
+  const exact = (names) => header.findIndex((h) => names.includes(h.toLowerCase()));
   const cols = {
     date: guess(["datum", "date", "zaúčtování", "zauctovani"]),
     amount: guess(["částka", "castka", "amount", "objem"]),
     vs: guess(["vs", "variabiln", "symbol"]),
-    party: guess(["protistrana", "název", "nazev", "protiúčet", "counterparty", "name", "zpráva pro", "zprava"]),
+    party: exact(["název protiúčtu", "nazev protiuctu", "protistrana", "counterparty name"]),
     msg: guess(["zpráva", "zprava", "message", "poznámka", "poznamka", "popis"]),
+    externalRef: exact(["id transakce", "transaction id", "reference"]),
   };
+  if (cols.party < 0) cols.party = guess(["protistrana", "protiúčet", "counterparty"]);
   const sel = (id, chosen) => `<select id="${id}"><option value="-1">—</option>${header.map((h, i) => `<option value="${i}" ${i === chosen ? "selected" : ""}>${esc(h)}</option>`).join("")}</select>`;
   document.getElementById("impArea").innerHTML = `
     <p class="text-dim" style="margin-top:16px">Zkontroluj přiřazení sloupců (CSV, oddělovač „${delimiter}"):</p>
@@ -2525,6 +2572,7 @@ function parseCsvWithMapping(text) {
       <div><label>Variabilní symbol</label>${sel("mapVs", cols.vs)}</div>
       <div><label>Protistrana</label>${sel("mapParty", cols.party)}</div>
       <div><label>Zpráva/popis</label>${sel("mapMsg", cols.msg)}</div>
+      <div><label>ID transakce</label>${sel("mapExternalRef", cols.externalRef)}</div>
     </div>
     <div class="form-actions"><button type="button" data-action="csv-parse">Načíst řádky</button></div>
     <div id="impPreview"></div>`;
@@ -2533,7 +2581,7 @@ function parseCsvWithMapping(text) {
 
 function csvParseRows() {
   const idx = (id) => Number(document.getElementById(id).value);
-  const di = idx("mapDate"), ai = idx("mapAmount"), vi = idx("mapVs"), pi = idx("mapParty"), mi = idx("mapMsg");
+  const di = idx("mapDate"), ai = idx("mapAmount"), vi = idx("mapVs"), pi = idx("mapParty"), mi = idx("mapMsg"), ei = idx("mapExternalRef");
   if (di < 0 || ai < 0) return toast("Vyber alespoň sloupec Datum a Částka.", "error");
   importParsedLines = (window._csvRows || []).map((r) => {
     let raw = (r[ai] || "").replace(/\s/g, "").replace(/\.(?=\d{3})/g, "").replace(",", ".");
@@ -2541,7 +2589,7 @@ function csvParseRows() {
     let date = (r[di] || "").trim();
     const m = date.match(/(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/); // dd.mm.yyyy → yyyy-mm-dd
     if (m) date = `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
-    return { statement_date: date, amount, counterparty_name: pi >= 0 ? (r[pi] || null) : (mi >= 0 ? r[mi] : null), variable_symbol: vi >= 0 ? (r[vi] || null) : null };
+    return { statement_date: date, amount, counterparty_name: pi >= 0 ? (r[pi] || null) : (mi >= 0 ? r[mi] : null), variable_symbol: vi >= 0 ? (r[vi] || null) : null, external_ref: ei >= 0 ? (r[ei] || null) : null };
   }).filter((l) => l.statement_date && !isNaN(l.amount));
   renderImportPreview("CSV", "impPreview");
 }
@@ -2701,8 +2749,8 @@ async function renderReports() {
         <label style="margin:0">Rozvaha ke dni</label><input type="date" id="repAsOf" value="${asOf}" style="width:auto" />
         <label style="margin:0">Výsledovka za období</label><select id="repPeriod" style="width:auto">${periodOptions(period)}</select>
         <div class="spacer"></div>
-        <a class="btn secondary" style="text-decoration:none" href="${API}/export/rozvaha?unit=${unit}&asOf=${asOf}" target="_blank">Export rozvaha CSV</a>
-        <a class="btn secondary" style="text-decoration:none" href="${API}/export/vysledovka?unit=${unit}&period=${period||''}" target="_blank">Export výsledovka CSV</a>
+        <span>Rozvaha: ${exportButtons("rozvaha", `?unit=${unit}&asOf=${asOf}`)}</span>
+        <span>Výsledovka: ${exportButtons("vysledovka", `?unit=${unit}&period=${period||''}`)}</span>
       </div>
     </div>
 
@@ -3453,6 +3501,11 @@ document.addEventListener("click", async (e) => {
       case "restart-desktop-update": window.desktopUpdater.restart(); break;
       case "toggle-balance-visibility": toggleBalanceVisibility(); break;
       case "download-desktop": await downloadDesktopInstaller(id); break;
+      case "download-export": {
+        const el = e.target.closest("[data-path]");
+        await downloadProtected(el.dataset.path, el.dataset.file);
+        break;
+      }
       case "dismiss-desktop-banner": dismissDesktopBanner(); break;
       case "download-attachment": {
         e.preventDefault();

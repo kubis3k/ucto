@@ -702,3 +702,17 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS trg_posting_month_lock ON posting;
 CREATE TRIGGER trg_posting_month_lock BEFORE INSERT ON posting
     FOR EACH ROW EXECUTE FUNCTION trg_fn_posting_month_lock();
+
+CREATE OR REPLACE FUNCTION trg_fn_cash_nonnegative() RETURNS TRIGGER AS $$
+BEGIN
+    IF (SELECT account_number FROM chart_of_accounts WHERE id = NEW.account_id) LIKE '211%'
+       AND (SELECT COALESCE(SUM(CASE WHEN side='MD' THEN amount ELSE -amount END),0)
+            FROM posting_line WHERE account_id = NEW.account_id) < -0.005 THEN
+        RAISE EXCEPTION 'Pokladna (211) nemůže mít záporný zůstatek. Nejprve zaúčtujte příjem hotovosti.';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_cash_nonnegative ON posting_line;
+CREATE TRIGGER trg_cash_nonnegative AFTER INSERT ON posting_line
+    FOR EACH ROW EXECUTE FUNCTION trg_fn_cash_nonnegative();
