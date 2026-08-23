@@ -2028,7 +2028,7 @@ async function renderLedger() {
       <div class="toolbar"><label style="margin:0">Ke dni</label><input type="date" id="ledgerAsOf" value="${asOf}" style="width:auto" /></div>
       <div style="margin-top:14px;padding:12px 14px;border-radius:10px;background:${integrity.balanced ? "#eaf8f0" : "#fff0f0"};color:${integrity.balanced ? "#147a46" : "#b42318"}">
         <strong>${integrity.balanced ? "Kontrola podvojnosti je v pořádku" : "Chyba podvojnosti v aktivních zápisech"}</strong><br>
-        MD ${fmtMoney(integrity.md_total)} / D ${fmtMoney(integrity.d_total)} / rozdíl ${fmtMoney(integrity.difference)}
+        Celkové účetní obraty: MD ${fmtMoney(integrity.md_total)} / D ${fmtMoney(integrity.d_total)} / rozdíl ${fmtMoney(integrity.difference)}
         ${integrity.unbalanced_postings.length ? `<br>Dotčené zápisy: ${integrity.unbalanced_postings.map((p) => `${p.posting_number} (${fmtMoney(p.difference)})`).join(", ")}` : ""}
       </div>
     </div>
