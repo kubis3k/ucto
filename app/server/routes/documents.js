@@ -124,6 +124,7 @@ router.post("/", async (req, res) => {
 // responsible_user_id se needitují (identifikátory/workflow pole).
 router.put("/:id", async (req, res) => {
   const {
+    doc_type,
     contact_id, project_id, variable_symbol, issue_date, taxable_supply_date, due_date,
     description, total_amount, currency, is_vat_document, vat_base_amount, vat_rate, vat_amount,
     counterparty_dic, cash_payee_name, cash_payee_address, cash_payee_id_number, lines,
@@ -147,6 +148,13 @@ router.put("/:id", async (req, res) => {
     const doc = await store.transaction(async () => {
       const newIssueDate = issue_date ?? existing.issue_date;
       const newCurrency = currency ?? existing.currency ?? "CZK";
+      const newDocType = doc_type ?? existing.doc_type;
+      const allowedDocTypes = new Set(["faktura_vydana", "faktura_prijata", "pokladni_prijem", "pokladni_vydej", "bankovni_pohyb", "interni_doklad", "nabidka"]);
+      if (!allowedDocTypes.has(newDocType)) throw new Error("Neplatný typ dokladu.");
+      const typeChanging = newDocType !== existing.doc_type;
+      const newDocNumber = typeChanging
+        ? await generateDocumentNumber(existing.accounting_unit_id, newDocType, new Date(newIssueDate).getFullYear())
+        : existing.doc_number;
 
       // FIX P2 (critic 2026-07-10, editace dokladu): bank.js /:id/match nemá
       // status guard, takže i doklad ve stavu 'koncept' lze spárovat s bankovním
@@ -155,7 +163,7 @@ router.put("/:id", async (req, res) => {
       // žádný "odpárovat" endpoint (dead-end pro uživatele), takže párování
       // raději rovnou ZRUŠÍME a napíšeme to do audit logu — bezpečnější než
       // tvrdě blokovat editaci nebo nechat nesedící matched_document_id.
-      const amountOrCurrencyChanging =
+      const amountOrCurrencyChanging = typeChanging ||
         (total_amount !== undefined && total_amount !== existing.total_amount) ||
         (currency !== undefined && currency !== existing.currency);
       let unmatchedLineId = null;
@@ -186,12 +194,13 @@ router.put("/:id", async (req, res) => {
 
       await store.run(
         `UPDATE document SET
-           contact_id=?, project_id=?, variable_symbol=?, issue_date=?, taxable_supply_date=?, due_date=?,
+           doc_type=?, doc_number=?, contact_id=?, project_id=?, variable_symbol=?, issue_date=?, taxable_supply_date=?, due_date=?,
            description=?, total_amount=?, currency=?, fx_rate=?, fx_rate_unit=?,
            is_vat_document=?, vat_base_amount=?, vat_rate=?, vat_amount=?, counterparty_dic=?,
            cash_payee_name=?, cash_payee_address=?, cash_payee_id_number=?
          WHERE id=? AND accounting_unit_id=?`,
         [
+          newDocType, newDocNumber,
           contact_id ?? existing.contact_id, project_id ?? existing.project_id, variable_symbol ?? existing.variable_symbol,
           newIssueDate, taxable_supply_date ?? existing.taxable_supply_date, due_date ?? existing.due_date,
           description ?? existing.description, total_amount ?? existing.total_amount, newCurrency, fxRate, fxRateUnit,
@@ -218,7 +227,10 @@ router.put("/:id", async (req, res) => {
 
       await writeAuditLog({
         unitId: existing.accounting_unit_id, userId: req.user.id, action: "UPDATE", table: "document", entityId: req.params.id, before: existing,
-        after: unmatchedLineId ? { unmatched_bank_line_id: unmatchedLineId, reason: "total_amount/currency změněny po spárování s bankou" } : undefined,
+        after: {
+          doc_type: newDocType, doc_number: newDocNumber,
+          ...(unmatchedLineId ? { unmatched_bank_line_id: unmatchedLineId, reason: "typ/částka/měna změněny po spárování s bankou" } : {}),
+        },
       });
       const updated = await store.get("SELECT * FROM document WHERE id = ?", [req.params.id]);
       const updatedLines = await store.all("SELECT * FROM document_line WHERE document_id = ? ORDER BY line_no", [req.params.id]);

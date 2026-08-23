@@ -1032,7 +1032,7 @@ function documentFormModal(existingDoc) {
     <form data-form="${isEdit ? "update-document" : "create-document"}" ${isEdit ? `data-id="${d.id}"` : ""}>
       <div class="form-grid">
         <div><label>Typ dokladu</label>
-          <select name="doc_type" ${isEdit ? "disabled" : ""}>${Object.entries(DOC_TYPE_LABEL).map(([k,v]) => `<option value="${k}" ${d.doc_type===k?"selected":""}>${v}</option>`).join("")}</select>
+          <select name="doc_type">${Object.entries(DOC_TYPE_LABEL).map(([k,v]) => `<option value="${k}" ${d.doc_type===k?"selected":""}>${v}</option>`).join("")}</select>
         </div>
         <div><label>Kontakt</label>
           <select name="contact_id"><option value="">—</option>${STATE._contacts.map((c) => `<option value="${c.id}" ${String(d.contact_id)===String(c.id)?"selected":""}>${esc(c.name)}</option>`).join("")}</select>
@@ -1110,7 +1110,6 @@ async function handleCreateDocument(form) {
 async function handleUpdateDocument(form) {
   const id = form.dataset.id;
   const body = collectDocumentFormBody(form);
-  delete body.doc_type;
   delete body.period_id;
   const updated = await api("PUT", `/documents/${id}`, body);
   if (updated._unmatched_bank_line) {
