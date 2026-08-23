@@ -11,22 +11,26 @@ async function account(unitId, number) {
 }
 
 async function createPosting({ unitId, userId, date, description, documentId = null, lines }) {
-  const period = await resolvePeriodForDate(unitId, date);
-  if (!period) throw new Error(`Pro datum ${date} neexistuje účetní období.`);
-  await assertMonthOpen(unitId, date);
-  const number = await nextPostingNumber(unitId);
-  await store.run(
+  try {
+    const period = await resolvePeriodForDate(unitId, date);
+    if (!period) throw new Error(`Pro datum ${date} neexistuje účetní období.`);
+    await assertMonthOpen(unitId, date);
+    const number = await nextPostingNumber(unitId);
+    await store.run(
     `INSERT INTO posting (accounting_unit_id,period_id,posting_number,document_id,posting_date,description,created_by)
      VALUES (?,?,?,?,?,?,?)`,
     [unitId, period.id, number, documentId, date, description, userId]
-  );
-  const id = (await store.get("SELECT last_insert_rowid() AS id")).id;
-  for (const line of lines) await store.run(
+    );
+    const id = (await store.get("SELECT last_insert_rowid() AS id")).id;
+    for (const line of lines) await store.run(
     "INSERT INTO posting_line (posting_id,account_id,side,amount) VALUES (?,?,?,?)",
     [id, line.account_id, line.side, line.amount]
-  );
-  await writeAuditLog({ unitId, userId, action: "POST", table: "posting", entityId: id, after: { migration: "bank-history-v2", description } });
-  return id;
+    );
+    await writeAuditLog({ unitId, userId, action: "POST", table: "posting", entityId: id, after: { migration: "bank-history-v2", description } });
+    return id;
+  } catch (err) {
+    throw new Error(`[${description}] ${err.message}`);
+  }
 }
 
 async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }) {
