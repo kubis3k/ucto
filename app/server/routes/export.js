@@ -76,11 +76,16 @@ router.get("/doklady", async (req, res) => {
 });
 
 router.get("/hlavni-kniha", async (req, res) => {
-  const rows = await reports.hlavniKniha(req.query.unit, req.query.asOf || new Date().toISOString().slice(0, 10));
+  const asOf = req.query.asOf || new Date().toISOString().slice(0, 10);
+  const integrity = await reports.ledgerIntegrity(req.query.unit, asOf);
+  if (!integrity.balanced) return res.status(409).json({ error: "Hlavní knihu nelze exportovat: aktivní účetní zápisy nejsou podvojně vyrovnané.", integrity });
+  const rows = await reports.hlavniKniha(req.query.unit, asOf);
   await sendFormat(req, res, "hlavni-kniha", "Hlavní kniha", rows);
 });
 
 router.get("/ucetni-denik", async (req, res) => {
+  const integrity = await reports.ledgerIntegrity(req.query.unit, new Date().toISOString().slice(0, 10));
+  if (!integrity.balanced) return res.status(409).json({ error: "Účetní deník nelze exportovat: aktivní účetní zápisy nejsou podvojně vyrovnané.", integrity });
   const rows = await store.all(
     `SELECT p.posting_number, p.posting_date, p.description, coa.account_number, coa.name AS account_name, pl.side, pl.amount
      FROM posting p JOIN posting_line pl ON pl.posting_id = p.id JOIN chart_of_accounts coa ON coa.id = pl.account_id

@@ -13,6 +13,12 @@ router.get("/hlavni-kniha", async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+router.get("/ledger-integrity", async (req, res) => {
+  try {
+    res.json(await reports.ledgerIntegrity(req.query.unit, req.query.asOf || new Date().toISOString().slice(0, 10)));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // GET /api/reports/rozvaha?unit=1&asOf=2026-12-31
 router.get("/rozvaha", async (req, res) => {
   try {

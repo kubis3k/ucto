@@ -62,6 +62,43 @@ async function hlavniKniha(unitId, asOfDate) {
   });
 }
 
+// Nezávislá kontrola podvojnosti nad skutečně aktivními zápisy. Supersedovaný
+// zápis se vyřazuje jako celek, takže kontrola nikdy nesčítá jen jednu jeho
+// stranu. Výsledek slouží také jako pojistka před účetními exporty.
+async function ledgerIntegrity(unitId, asOfDate) {
+  const rows = await store.all(
+    `SELECT p.id, p.posting_number, p.posting_date, p.description,
+            COALESCE(SUM(CASE WHEN pl.side='MD' THEN pl.amount ELSE 0 END),0) AS md_total,
+            COALESCE(SUM(CASE WHEN pl.side='D' THEN pl.amount ELSE 0 END),0) AS d_total
+     FROM posting p
+     JOIN posting_line pl ON pl.posting_id = p.id
+     WHERE p.accounting_unit_id = ? AND p.posting_date <= ?
+       AND NOT EXISTS (SELECT 1 FROM posting_supersession ps WHERE ps.posting_id=p.id)
+     GROUP BY p.id, p.posting_number, p.posting_date, p.description
+     ORDER BY p.posting_date, p.posting_number`,
+    [unitId, asOfDate]
+  );
+  const normalized = rows.map((r) => ({
+    id: r.id,
+    posting_number: r.posting_number,
+    posting_date: r.posting_date,
+    description: r.description,
+    md_total: roundMoney(r.md_total),
+    d_total: roundMoney(r.d_total),
+    difference: roundMoney(Number(r.md_total) - Number(r.d_total)),
+  }));
+  const mdTotal = roundMoney(normalized.reduce((sum, r) => sum + r.md_total, 0));
+  const dTotal = roundMoney(normalized.reduce((sum, r) => sum + r.d_total, 0));
+  const unbalanced = normalized.filter((r) => Math.abs(r.difference) >= 0.01);
+  return {
+    balanced: unbalanced.length === 0 && Math.abs(roundMoney(mdTotal - dTotal)) < 0.01,
+    md_total: mdTotal,
+    d_total: dTotal,
+    difference: roundMoney(mdTotal - dTotal),
+    unbalanced_postings: unbalanced,
+  };
+}
+
 // ROZVAHA (zjednodušený rozsah — mikro účetní jednotka, agregováno podle
 // vyhlášky č. 500/2002 Sb., příloha č. 1 — viz lib/statementMapping.js
 // pro mapu účet->řádek a právní upozornění o nutném ověření účetní firmou).
@@ -325,4 +362,4 @@ async function prilohaAutoData(unitId, periodId, asOfDate) {
   };
 }
 
-module.exports = { hlavniKniha, rozvaha, vysledovka, obratDph, knihaPohledavkyZavazky, accountNaturalBalance, prilohaAutoData };
+module.exports = { hlavniKniha, ledgerIntegrity, rozvaha, vysledovka, obratDph, knihaPohledavkyZavazky, accountNaturalBalance, prilohaAutoData };
