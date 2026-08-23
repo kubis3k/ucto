@@ -258,7 +258,8 @@ router.post("/:id/match", async (req, res) => {
 
     const already = await store.get(
       `SELECT COALESCE(SUM(ABS(amount)),0) AS sum FROM bank_statement_line
-       WHERE matched_document_id = ? AND accounting_unit_id = ? AND id <> ?`,
+       WHERE matched_document_id = ? AND accounting_unit_id = ? AND id <> ?
+         AND superseded_by_bank_line_id IS NULL`,
       [document_id, unitId, req.params.id]
     );
     const alreadyMatched = Math.round(Number(already.sum) * 100) / 100;

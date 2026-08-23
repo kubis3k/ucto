@@ -239,7 +239,8 @@ async function knihaPohledavkyZavazky(unitId) {
   const rows = await store.all(
     `SELECT d.id AS document_id, d.doc_type, d.doc_number, c.name AS protistrana,
             d.issue_date, d.due_date, d.total_amount, d.status, d.currency, d.fx_rate, d.fx_rate_unit,
-            COALESCE((SELECT SUM(ABS(amount)) FROM bank_statement_line WHERE matched_document_id = d.id), 0) AS uhrazeno
+            COALESCE((SELECT SUM(ABS(amount)) FROM bank_statement_line
+                      WHERE matched_document_id = d.id AND superseded_by_bank_line_id IS NULL), 0) AS uhrazeno
      FROM document d
      LEFT JOIN contact c ON c.id = d.contact_id
      WHERE d.accounting_unit_id = ? AND d.doc_type IN ('faktura_vydana','faktura_prijata')
