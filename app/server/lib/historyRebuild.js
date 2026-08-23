@@ -22,9 +22,11 @@ async function createPosting({ unitId, userId, date, description, documentId = n
     [unitId, period.id, number, documentId, date, description, userId]
     );
     const id = inserted.id;
-    for (const line of lines) await store.run(
-    "INSERT INTO posting_line (posting_id,account_id,side,amount) VALUES (?,?,?,?)",
-    [id, line.account_id, line.side, line.amount]
+    // Produkční append-only trigger uzamkne zápis po prvním INSERTu.
+    // Všechny řádky proto musí vzniknout jedním atomickým příkazem.
+    await store.run(
+      `INSERT INTO posting_line (posting_id,account_id,side,amount) VALUES ${lines.map(() => "(?,?,?,?)").join(",")}`,
+      lines.flatMap((line) => [id, line.account_id, line.side, line.amount])
     );
     await writeAuditLog({ unitId, userId, action: "POST", table: "posting", entityId: id, after: { migration: "bank-history-v2", description } });
     return id;
