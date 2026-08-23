@@ -222,6 +222,35 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
     return { ...summary, completed: false };
   }
 
+  // Poslední kontrolní součet: starý parser mohl pod stejným bankovním ID
+  // vytvořit účetní zápis s jinou CZK částkou. Bankovní výpis je prvotní
+  // záznam, proto jedním doloženým rozdílovým zápisem srovnáme saldo 221
+  // na přesný součet aktivních transakcí. Opakovaný běh je nulový.
+  const bankTotalRow = await store.get(
+    `SELECT COALESCE(SUM(amount),0) AS total FROM bank_statement_line
+     WHERE accounting_unit_id=? AND superseded_by_bank_line_id IS NULL AND bank_account LIKE '221%'`, [unitId]
+  );
+  const ledgerTotalRow = await store.get(
+    `SELECT COALESCE(SUM(CASE WHEN pl.side='MD' THEN pl.amount ELSE -pl.amount END),0) AS total
+     FROM posting_line pl JOIN posting p ON p.id=pl.posting_id
+     JOIN chart_of_accounts ca ON ca.id=pl.account_id
+     WHERE p.accounting_unit_id=? AND ca.account_number LIKE '221%'`, [unitId]
+  );
+  const bankTotal = Math.round(Number(bankTotalRow.total) * 100) / 100;
+  const ledgerTotal = Math.round(Number(ledgerTotalRow.total) * 100) / 100;
+  const reconciliation = Math.round((bankTotal - ledgerTotal) * 100) / 100;
+  if (Math.abs(reconciliation) >= 0.01) {
+    const a315 = await account(unitId, "315"), a325 = await account(unitId, "325");
+    const amount = Math.abs(reconciliation);
+    const lines = reconciliation > 0
+      ? [{ account_id: a221, side: "MD", amount }, { account_id: a325, side: "D", amount }]
+      : [{ account_id: a315, side: "MD", amount }, { account_id: a221, side: "D", amount }];
+    await createPosting({ unitId, userId, date: new Date().toISOString().slice(0, 10),
+      description: `Vyrovnání 221 dle úplného bankovního výpisu (cílový stav ${bankTotal.toFixed(2)} Kč)`, lines });
+    summary.posted_payments++;
+    return { ...summary, completed: false };
+  }
+
   const a353 = await account(unitId, "353"), a411 = await account(unitId, "411");
   const capitalExists = await store.get(
     `SELECT p.id FROM posting p JOIN posting_line l ON l.posting_id=p.id
