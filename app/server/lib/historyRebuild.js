@@ -38,21 +38,18 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
 
   // Nový řádek s external_ref sloučit do staršího kanonického řádku,
   // který už může nést vazbu na doklad/zápis.
-  const imported = await store.all(
-    "SELECT * FROM bank_statement_line WHERE accounting_unit_id=? AND external_ref IS NOT NULL ORDER BY id DESC",
-    [unitId]
+  const duplicate = await store.get(
+    `SELECT n.id FROM bank_statement_line n WHERE n.accounting_unit_id=? AND n.external_ref IS NOT NULL
+       AND n.matched_document_id IS NULL AND n.posting_id IS NULL AND EXISTS (
+         SELECT 1 FROM bank_statement_line o WHERE o.accounting_unit_id=n.accounting_unit_id
+          AND o.id<>n.id AND o.external_ref IS NULL AND o.bank_account=n.bank_account
+          AND o.statement_date=n.statement_date AND o.amount=n.amount)
+     ORDER BY n.id LIMIT 1`, [unitId]
   );
-  for (const fresh of imported) {
-    const old = await store.get(
-      `SELECT * FROM bank_statement_line WHERE accounting_unit_id=? AND id<>? AND external_ref IS NULL
-       AND bank_account=? AND statement_date=? AND amount=? ORDER BY id LIMIT 1`,
-      [unitId, fresh.id, fresh.bank_account, fresh.statement_date, fresh.amount]
-    );
-    if (!old) continue;
-    if (!fresh.matched_document_id && !fresh.posting_id) {
-      await store.run("DELETE FROM bank_statement_line WHERE id=?", [fresh.id]);
-      summary.merged_duplicates++;
-    }
+  if (duplicate) {
+    await store.run("DELETE FROM bank_statement_line WHERE id=?", [duplicate.id]);
+    summary.merged_duplicates = 1;
+    return { ...summary, completed: false };
   }
 
   const a221 = await account(unitId, "221"), a354 = await account(unitId, "354"), a365 = await account(unitId, "365");
@@ -79,6 +76,7 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
       description: `OPRAVA SPRÁVNÉ zápůjčky k zápisu č. ${p.posting_number}`,
       lines: [{ account_id: a221, side: "MD", amount: amountRow.amount }, { account_id: a365, side: "D", amount: amountRow.amount }] });
     summary.corrected_loans++;
+    return { ...summary, completed: false };
   }
 
   // Nové, dosud nezaúčtované příjmy od potvrzených společníků.
@@ -90,6 +88,7 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
         lines: [{ account_id: a221, side: "MD", amount: Number(line.amount) }, { account_id: a365, side: "D", amount: Number(line.amount) }] });
       await store.run("UPDATE bank_statement_line SET posting_id=? WHERE id=?", [id, line.id]);
       summary.posted_loans++;
+      return { ...summary, completed: false };
     }
   }
 
@@ -117,6 +116,7 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
     const id = await createPosting({ unitId, userId, date: line.statement_date, documentId: line.document_id,
       description: `Úhrada ${line.doc_number}`, lines });
     summary.posted_payments++;
+    return { ...summary, completed: false };
   }
 
   const a353 = await account(unitId, "353"), a411 = await account(unitId, "411");
@@ -129,8 +129,9 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
     await createPosting({ unitId, userId, date: capitalDate, description: "Úpis nesplaceného základního kapitálu",
       lines: [{ account_id: a353, side: "MD", amount: capitalAmount }, { account_id: a411, side: "D", amount: capitalAmount }] });
     summary.capital_posted = true;
+    return { ...summary, completed: false };
   }
-  return summary;
+  return { ...summary, completed: true };
 }
 
 module.exports = { rebuildBankHistory };
