@@ -1,5 +1,5 @@
 const store = require("../db");
-const { nextPostingNumber, writeAuditLog, stornoPosting, assertMonthOpen } = require("./core");
+const { nextPostingNumber, writeAuditLog, assertMonthOpen } = require("./core");
 const { resolvePeriodForDate } = require("./recurring");
 
 const SHAREHOLDER = /(?:štěpán\s+lísa|jakub\s+lučan|lučan\s+jakub|jan\s+leština|leština\s+jan)/i;
@@ -60,15 +60,24 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
      JOIN posting_line b ON b.posting_id=p.id AND b.account_id=? AND b.side='D'
      JOIN posting_line s ON s.posting_id=p.id AND s.account_id=? AND s.side='MD'
      WHERE p.accounting_unit_id=? AND p.storno_of_posting_id IS NULL
-       AND NOT EXISTS (SELECT 1 FROM posting x WHERE x.storno_of_posting_id=p.id)`,
+       AND NOT EXISTS (SELECT 1 FROM posting x WHERE x.storno_of_posting_id=p.id)
+       AND NOT EXISTS (SELECT 1 FROM posting x WHERE x.accounting_unit_id=p.accounting_unit_id
+         AND x.description = ('OPRAVNÝ ZÁPIS zápůjčky k zápisu č. ' || p.posting_number))`,
     [a221, a354, unitId]
   );
   for (const p of wrongLoans) {
     const amountRow = await store.get("SELECT amount FROM posting_line WHERE posting_id=? AND account_id=?", [p.id, a221]);
-    await stornoPosting(p.id, "Migrace zápůjčky: oprava 354/221 na 221/365", userId, unitId);
+    // Jeden třířádkový opravný zápis: MD 221 / D 354 ruší
+    // původní MD 354 / D 221 a MD 221 / D 365 zapisuje správnou zápůjčku.
+    // MD je agregované, aby se zápis vyrovnal až posledním řádkem —
+    // produkční DB po vyrovnání další řádek záměrně nepovolí.
     await createPosting({ unitId, userId, date: new Date().toISOString().slice(0, 10),
-      description: `OPRAVA zápůjčky k zápisu č. ${p.posting_number}`,
-      lines: [{ account_id: a221, side: "MD", amount: amountRow.amount }, { account_id: a365, side: "D", amount: amountRow.amount }] });
+      description: `OPRAVNÝ ZÁPIS zápůjčky k zápisu č. ${p.posting_number}`,
+      lines: [
+        { account_id: a221, side: "MD", amount: Number(amountRow.amount) * 2 },
+        { account_id: a354, side: "D", amount: amountRow.amount },
+        { account_id: a365, side: "D", amount: amountRow.amount },
+      ] });
     summary.corrected_loans++;
   }
 
