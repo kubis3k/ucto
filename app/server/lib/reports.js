@@ -163,7 +163,7 @@ async function vysledovka(unitId, periodId, asOfDate) {
      JOIN posting p ON p.id = pl.posting_id
      JOIN chart_of_accounts coa ON coa.id = pl.account_id
      WHERE coa.accounting_unit_id = ? AND coa.account_type IN ('vysledkovy_naklad','vysledkovy_vynos')
-       AND p.posting_date BETWEEN ? AND ? AND coa.parent_account_id IS NULL
+       AND p.posting_date BETWEEN ? AND ?
        AND NOT EXISTS (SELECT 1 FROM posting_supersession ps WHERE ps.posting_id=p.id)
      GROUP BY coa.account_type, coa.account_number, coa.name
      ORDER BY coa.account_type, coa.account_number`,

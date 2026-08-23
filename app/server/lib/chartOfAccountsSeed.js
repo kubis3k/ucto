@@ -112,6 +112,9 @@ const ACCOUNTS = [
   // Analytické podúčty k 518 (per akce/klient)
   ["518100", "518 — analytika: Nik Tendo Praha", 5, "vysledkovy_naklad", "518"],
   ["518200", "518 — analytika: 3L Fest", 5, "vysledkovy_naklad", "518"],
+  ["518300", "Software a cloudové služby (SaaS)", 5, "vysledkovy_naklad", "518"],
+  ["518400", "Reklama a marketing", 5, "vysledkovy_naklad", "518"],
+  ["518500", "Telekomunikační služby a firemní e-SIM", 5, "vysledkovy_naklad", "518"],
 ];
 
 // Vloží účty (v pořadí bez rodičů, pak s rodiči) pro danou accounting_unit_id.

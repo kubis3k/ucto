@@ -11,6 +11,9 @@ const router = express.Router();
 // Vestavěný slovník klíčových slov — výchozí návrh kategorie, dokud si
 // systém nevytvoří vlastní naučená pravidla z reálného zaúčtování (viz níže).
 const KEYWORD_HINTS = [
+  { pattern: /meta\s*pay|facebook|instagram|reklam|marketing/i, account_number: "518400" },
+  { pattern: /vercel|vast\.ai|chatgpt|claude|anthropic/i, account_number: "518300" },
+  { pattern: /mobil\.cz|e-?sim|telekom|telefon/i, account_number: "518500" },
   { pattern: /popla|vedení účtu/i, account_number: "568" },
   { pattern: /úrok/i, account_number: "662" },
   { pattern: /nájem|pronáj/i, account_number: "518" },

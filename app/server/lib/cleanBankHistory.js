@@ -32,6 +32,34 @@ async function createPosting(unitId, userId, line, description, pairs, documentI
 async function cleanBankHistory({ unitId, userId }) {
   const summary = { superseded: 0, generated: 0 };
 
+  // Starší čistá historie dávala všechny on-line platby přímo na syntetický
+  // 518. Převedeme je na stabilní analytiky: SaaS, marketing, telekomunikace.
+  const oldService = await store.get(
+    `SELECT cp.bank_line_id,cp.posting_id,b.counterparty_name
+     FROM bank_clean_posting cp
+     JOIN bank_statement_line b ON b.id=cp.bank_line_id
+     JOIN posting p ON p.id=cp.posting_id
+     WHERE b.accounting_unit_id=?
+       AND NOT EXISTS (SELECT 1 FROM posting_supersession ps WHERE ps.posting_id=p.id)
+       AND EXISTS (SELECT 1 FROM posting_line pl JOIN chart_of_accounts ca ON ca.id=pl.account_id
+                   WHERE pl.posting_id=p.id AND ca.account_number='518')
+       AND (LOWER(COALESCE(b.counterparty_name,'')) LIKE '%meta%'
+         OR LOWER(COALESCE(b.counterparty_name,'')) LIKE '%vercel%'
+         OR LOWER(COALESCE(b.counterparty_name,'')) LIKE '%vast%'
+         OR LOWER(COALESCE(b.counterparty_name,'')) LIKE '%chatgpt%'
+         OR LOWER(COALESCE(b.counterparty_name,'')) LIKE '%claude%'
+         OR LOWER(COALESCE(b.counterparty_name,'')) LIKE '%mobil%')
+     ORDER BY p.id LIMIT 1`, [unitId]
+  );
+  if (oldService) {
+    await store.run("INSERT INTO posting_supersession (posting_id,reason) VALUES (?,?)",
+      [oldService.posting_id, "Převedeno na analytiku služeb"]);
+    await store.run("DELETE FROM bank_clean_posting WHERE bank_line_id=?", [oldService.bank_line_id]);
+    await store.run("DELETE FROM bank_clean_pending WHERE bank_line_id=?", [oldService.bank_line_id]);
+    await store.run("UPDATE bank_statement_line SET posting_id=NULL WHERE id=?", [oldService.bank_line_id]);
+    return { ...summary, superseded: 1, completed: false };
+  }
+
   // Starší automatické párování mohlo vklad společníka spojit s fakturou
   // jen kvůli shodné částce. Vazbu i takto vzniklý čistý posting zrušíme a
   // řádek necháme znovu vytvořit bez document_id na účty 221/365.
@@ -122,7 +150,8 @@ async function cleanBankHistory({ unitId, userId }) {
        LOWER(COALESCE(b.counterparty_name,'')) LIKE '%claude%' OR
        LOWER(COALESCE(b.counterparty_name,'')) LIKE '%chatgpt%' OR
        LOWER(COALESCE(b.counterparty_name,'')) LIKE '%vast%' OR
-       LOWER(COALESCE(b.counterparty_name,'')) LIKE '%vercel%'
+       LOWER(COALESCE(b.counterparty_name,'')) LIKE '%vercel%' OR
+       LOWER(COALESCE(b.counterparty_name,'')) LIKE '%mobil%'
      ) ORDER BY b.id LIMIT 1`, [unitId]
   );
   if (reconsider) {
@@ -151,8 +180,12 @@ async function cleanBankHistory({ unitId, userId }) {
     other = await account(unitId, "311"); description = `Úhrada ${line.doc_number}`;
   } else if (line.doc_type === "faktura_prijata" && Number(line.amount) < 0) {
     other = await account(unitId, "321"); description = `Úhrada ${line.doc_number}`;
-  } else if (/meta|claude|chatgpt|vast|vercel/i.test(line.counterparty_name || "")) {
-    other = await account(unitId, "518"); description = `Online služba — ${line.counterparty_name || line.external_ref}`;
+  } else if (/meta\s*pay|facebook|instagram/i.test(line.counterparty_name || "")) {
+    other = await account(unitId, "518400"); description = `Reklama a marketing — ${line.counterparty_name || line.external_ref}`;
+  } else if (/claude|anthropic|chatgpt|vast|vercel/i.test(line.counterparty_name || "")) {
+    other = await account(unitId, "518300"); description = `Software / SaaS — ${line.counterparty_name || line.external_ref}`;
+  } else if (/mobil\.cz|e-?sim|telekom|telefon/i.test(line.counterparty_name || "")) {
+    other = await account(unitId, "518500"); description = `Telekomunikační služba — ${line.counterparty_name || line.external_ref}`;
   } else {
     // Neznámý pohyb není účetní případ bez zvolené kontace. Zůstává pouze
     // v bankovní frontě; pomocné účty 315/325 by jej po spárování zdvojily.
