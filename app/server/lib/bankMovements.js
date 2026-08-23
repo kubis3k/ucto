@@ -83,11 +83,32 @@ async function autoMatchLine(lineId, unitId) {
       line.amount, line.amount, line.variable_symbol, line.variable_symbol]
   );
   const exactVs = candidates.filter((d) => line.variable_symbol && d.variable_symbol === line.variable_symbol);
-  const viable = exactVs.length ? exactVs : candidates.filter((d) => amountsMatch(line.amount, d.total_amount));
+  let viable;
+  if (exactVs.length) {
+    const withRemaining = [];
+    for (const d of exactVs) {
+      const paid = await store.get(
+        `SELECT COALESCE(SUM(ABS(amount)),0) AS total FROM bank_statement_line
+         WHERE matched_document_id=? AND accounting_unit_id=?
+           AND superseded_by_bank_line_id IS NULL AND id<>?`,
+        [d.id, unitId, line.id]
+      );
+      const remaining = Math.round((Number(d.total_amount) - Number(paid.total)) * 100) / 100;
+      if (remaining > 0 && Math.abs(Number(line.amount)) <= remaining + 0.02) {
+        withRemaining.push({ ...d, _remaining: remaining });
+      }
+    }
+    // U sdíleného VS dáme přednost dokladu, jehož zbývající část přesně
+    // odpovídá platbě. Jinak lze automatizovat jen jediného kandidáta.
+    const exactRemaining = withRemaining.filter((d) => Math.abs(d._remaining - Math.abs(Number(line.amount))) < 0.01);
+    viable = exactRemaining.length === 1 ? exactRemaining : withRemaining;
+  } else {
+    viable = candidates.filter((d) => amountsMatch(line.amount, d.total_amount));
+  }
   // Částka sama je bezpečná jen při jediné shodě; při více kandidátech
   // musí rozhodnout uživatel. Variabilní symbol má přednost.
   const candidate = viable.length === 1 ? viable[0] : null;
-  if (!candidate || !amountsMatch(line.amount, candidate.total_amount)) return null;
+  if (!candidate || (!exactVs.length && !amountsMatch(line.amount, candidate.total_amount))) return null;
 
   await store.run(
     "UPDATE bank_statement_line SET matched_document_id = ? WHERE id = ? AND accounting_unit_id = ?",

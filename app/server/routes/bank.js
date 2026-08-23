@@ -372,8 +372,10 @@ router.get("/suggest-matches", async (req, res) => {
         `SELECT * FROM document
          WHERE accounting_unit_id = ? AND status <> 'stornovany'
            AND (variable_symbol = ? OR ABS(total_amount - ABS(?)) < 0.01)
+           AND ((doc_type='faktura_vydana' AND CAST(? AS DOUBLE PRECISION)>0)
+             OR (doc_type='faktura_prijata' AND CAST(? AS DOUBLE PRECISION)<0))
          LIMIT 1`,
-        [req.query.unit, line.variable_symbol, line.amount]
+        [req.query.unit, line.variable_symbol, line.amount, line.amount, line.amount]
       );
       if (candidate) suggestions.push({ bank_line: line, suggested_document: candidate });
     }
