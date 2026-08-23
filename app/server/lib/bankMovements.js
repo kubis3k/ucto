@@ -26,6 +26,9 @@ async function createBankStatementLine({ unitId, bankAccount, date, amount, coun
           counterparty_name=?,variable_symbol=?,superseded_by_bank_line_id=NULL WHERE id=?`,
         [bankAccount, date, amount, counterpartyName || null, variableSymbol || null, existing.id]
       );
+      // Opakovaný import může doplnit obchodníka/zprávu, kterou starší
+      // parser zahodil. Takový řádek musí jít znovu do klasifikace.
+      await store.run("DELETE FROM bank_clean_pending WHERE bank_line_id = ?", [existing.id]);
       return store.get("SELECT * FROM bank_statement_line WHERE id = ?", [existing.id]);
     }
   }
@@ -60,13 +63,22 @@ async function autoMatchLine(lineId, unitId) {
   );
   if (!line || line.matched_document_id) return null;
 
-  const candidate = await store.get(
+  const candidates = await store.all(
     `SELECT * FROM document
      WHERE accounting_unit_id = ? AND status <> 'stornovany'
-       AND (variable_symbol = ? OR ABS(total_amount - ABS(?)) < 0.01)
-     LIMIT 1`,
-    [unitId, line.variable_symbol, line.amount]
+       AND ((? IS NOT NULL AND ? <> '' AND variable_symbol = ?)
+         OR ABS(total_amount - ABS(?)) < 0.01)
+       AND ((doc_type='faktura_vydana' AND ? > 0)
+         OR (doc_type='faktura_prijata' AND ? < 0))
+     ORDER BY CASE WHEN variable_symbol = ? AND ? <> '' THEN 0 ELSE 1 END, id`,
+    [unitId, line.variable_symbol, line.variable_symbol, line.variable_symbol, line.amount,
+      line.amount, line.amount, line.variable_symbol, line.variable_symbol]
   );
+  const exactVs = candidates.filter((d) => line.variable_symbol && d.variable_symbol === line.variable_symbol);
+  const viable = exactVs.length ? exactVs : candidates.filter((d) => amountsMatch(line.amount, d.total_amount));
+  // Částka sama je bezpečná jen při jediné shodě; při více kandidátech
+  // musí rozhodnout uživatel. Variabilní symbol má přednost.
+  const candidate = viable.length === 1 ? viable[0] : null;
   if (!candidate || !amountsMatch(line.amount, candidate.total_amount)) return null;
 
   await store.run(

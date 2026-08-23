@@ -2560,6 +2560,7 @@ function parseCsvWithMapping(text) {
     amount: guess(["částka", "castka", "amount", "objem"]),
     vs: guess(["vs", "variabiln", "symbol"]),
     party: exact(["název protiúčtu", "nazev protiuctu", "protistrana", "counterparty name"]),
+    merchant: exact(["název obchodníka", "nazev obchodnika", "merchant", "merchant name"]),
     msg: guess(["zpráva", "zprava", "message", "poznámka", "poznamka", "popis"]),
     externalRef: exact(["id transakce", "transaction id", "reference"]),
   };
@@ -2572,6 +2573,7 @@ function parseCsvWithMapping(text) {
       <div><label>Částka</label>${sel("mapAmount", cols.amount)}</div>
       <div><label>Variabilní symbol</label>${sel("mapVs", cols.vs)}</div>
       <div><label>Protistrana</label>${sel("mapParty", cols.party)}</div>
+      <div><label>Obchodník (platby kartou)</label>${sel("mapMerchant", cols.merchant)}</div>
       <div><label>Zpráva/popis</label>${sel("mapMsg", cols.msg)}</div>
       <div><label>ID transakce</label>${sel("mapExternalRef", cols.externalRef)}</div>
     </div>
@@ -2582,7 +2584,7 @@ function parseCsvWithMapping(text) {
 
 function csvParseRows() {
   const idx = (id) => Number(document.getElementById(id).value);
-  const di = idx("mapDate"), ai = idx("mapAmount"), vi = idx("mapVs"), pi = idx("mapParty"), mi = idx("mapMsg"), ei = idx("mapExternalRef");
+  const di = idx("mapDate"), ai = idx("mapAmount"), vi = idx("mapVs"), pi = idx("mapParty"), oi = idx("mapMerchant"), mi = idx("mapMsg"), ei = idx("mapExternalRef");
   if (di < 0 || ai < 0) return toast("Vyber alespoň sloupec Datum a Částka.", "error");
   importParsedLines = (window._csvRows || []).map((r) => {
     let raw = (r[ai] || "").replace(/\s/g, "").replace(/\.(?=\d{3})/g, "").replace(",", ".");
@@ -2590,7 +2592,8 @@ function csvParseRows() {
     let date = (r[di] || "").trim();
     const m = date.match(/(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})/); // dd.mm.yyyy → yyyy-mm-dd
     if (m) date = `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
-    return { statement_date: date, amount, counterparty_name: pi >= 0 ? (r[pi] || null) : (mi >= 0 ? r[mi] : null), variable_symbol: vi >= 0 ? (r[vi] || null) : null, external_ref: ei >= 0 ? (r[ei] || null) : null };
+    const counterparty = (pi >= 0 && r[pi]) || (oi >= 0 && r[oi]) || (mi >= 0 && r[mi]) || null;
+    return { statement_date: date, amount, counterparty_name: counterparty, variable_symbol: vi >= 0 ? (r[vi] || null) : null, external_ref: ei >= 0 ? (r[ei] || null) : null };
   }).filter((l) => l.statement_date && !isNaN(l.amount));
   renderImportPreview("CSV", "impPreview");
 }

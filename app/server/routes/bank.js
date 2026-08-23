@@ -2,7 +2,7 @@ const express = require("express");
 const crypto = require("crypto");
 const store = require("../db");
 const { nextPostingNumber, writeAuditLog, assertPeriodOpen, assertMonthOpen } = require("../lib/core");
-const { createBankStatementLine } = require("../lib/bankMovements");
+const { createBankStatementLine, autoMatchLine } = require("../lib/bankMovements");
 const { resolvePeriodForDate } = require("../lib/recurring");
 const { getRate } = require("../lib/cnbExchangeRate");
 const { cleanBankHistory } = require("../lib/cleanBankHistory");
@@ -105,7 +105,7 @@ router.post("/import", async (req, res) => {
       let skipped = 0;
       for (const l of lines) {
         if (l.external_ref) {
-          inserted.push(await createBankStatementLine({
+          const imported = await createBankStatementLine({
             unitId: accounting_unit_id,
             bankAccount: bank_account,
             date: l.statement_date,
@@ -113,7 +113,9 @@ router.post("/import", async (req, res) => {
             counterpartyName: l.counterparty_name,
             variableSymbol: l.variable_symbol,
             externalRef: l.external_ref,
-          }));
+          });
+          await autoMatchLine(imported.id, accounting_unit_id);
+          inserted.push(await store.get("SELECT * FROM bank_statement_line WHERE id=?", [imported.id]));
           continue;
         }
         // Starší importy external_ref neukládaly. Nový CSV už ID transakce
@@ -124,7 +126,7 @@ router.post("/import", async (req, res) => {
           [accounting_unit_id, bank_account, l.statement_date, l.amount]
         );
         if (existing) { skipped += 1; continue; }
-        inserted.push(await createBankStatementLine({
+        const imported = await createBankStatementLine({
           unitId: accounting_unit_id,
           bankAccount: bank_account,
           date: l.statement_date,
@@ -132,7 +134,9 @@ router.post("/import", async (req, res) => {
           counterpartyName: l.counterparty_name,
           variableSymbol: l.variable_symbol,
           externalRef: l.external_ref,
-        }));
+        });
+        await autoMatchLine(imported.id, accounting_unit_id);
+        inserted.push(await store.get("SELECT * FROM bank_statement_line WHERE id=?", [imported.id]));
       }
       return { inserted, skipped };
     });

@@ -58,6 +58,27 @@ async function cleanBankHistory({ unitId, userId }) {
     return { ...summary, completed: false };
   }
 
+  // Po opraveném opakovaném importu mohou čekající řádky nově získat vazbu
+  // na doklad nebo rozpoznatelný název obchodníka. Vracejí se po jednom do
+  // klasifikace, aniž by vznikl provizorní účetní zápis.
+  const reconsider = await store.get(
+    `SELECT pending.bank_line_id FROM bank_clean_pending pending
+     JOIN bank_statement_line b ON b.id=pending.bank_line_id
+     WHERE b.accounting_unit_id=? AND (
+       b.matched_document_id IS NOT NULL OR
+       LOWER(COALESCE(b.counterparty_name,'')) LIKE '%meta%' OR
+       LOWER(COALESCE(b.counterparty_name,'')) LIKE '%claude%' OR
+       LOWER(COALESCE(b.counterparty_name,'')) LIKE '%chatgpt%' OR
+       LOWER(COALESCE(b.counterparty_name,'')) LIKE '%vast%' OR
+       LOWER(COALESCE(b.counterparty_name,'')) LIKE '%vercel%' OR
+       LOWER(COALESCE(b.counterparty_name,'')) LIKE '%globaal elevate prod%'
+     ) ORDER BY b.id LIMIT 1`, [unitId]
+  );
+  if (reconsider) {
+    await store.run("DELETE FROM bank_clean_pending WHERE bank_line_id=?", [reconsider.bank_line_id]);
+    return { ...summary, completed: false };
+  }
+
   const line = await store.get(
     `SELECT b.*,d.doc_type,d.doc_number,d.id AS document_id FROM bank_statement_line b
      LEFT JOIN document d ON d.id=b.matched_document_id
