@@ -109,6 +109,7 @@ async function migrate() {
   // Perzistence příloh — kde soubor reálně leží (lokální disk vs. objektové
   // úložiště), viz lib/attachmentStore.js. Staré řádky zůstávají 'fs'.
   await ensureColumn("document_attachment", "storage_backend", "TEXT NOT NULL DEFAULT 'fs'");
+  await ensureColumn("document_attachment", "file_data", "BLOB");
   await ensureColumn("document_attachment", "storage_url", "TEXT");
 }
 

@@ -28,8 +28,8 @@ function warnOnRiskyConfig() {
   }
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     console.warn(
-      "[konfigurace] POZOR: chybí BLOB_READ_WRITE_TOKEN — přílohy dokladů se ukládají " +
-      "na DOČASNÝ disk serverless funkce a zálohy vůbec neběží (§ 8 ZoÚ, průkaznost a trvalost)."
+      "[konfigurace] POZOR: chybí BLOB_READ_WRITE_TOKEN — na Vercelu se přílohy ukládají " +
+      "do databáze, ale pravidelné externí zálohy neběží (§ 8 ZoÚ, průkaznost a trvalost)."
     );
   }
   if (!process.env.CRON_SECRET) {

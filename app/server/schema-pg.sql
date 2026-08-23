@@ -233,10 +233,12 @@ CREATE TABLE IF NOT EXISTS document_attachment (
     size_bytes          INTEGER NOT NULL,
     storage_backend     TEXT NOT NULL DEFAULT 'fs' CHECK (storage_backend IN ('fs','blob')),
     storage_url         TEXT,
+    file_data           BYTEA,
     uploaded_at         TEXT NOT NULL DEFAULT (now()::text)
 );
 ALTER TABLE document_attachment ADD COLUMN IF NOT EXISTS storage_backend TEXT NOT NULL DEFAULT 'fs';
 ALTER TABLE document_attachment ADD COLUMN IF NOT EXISTS storage_url TEXT;
+ALTER TABLE document_attachment ADD COLUMN IF NOT EXISTS file_data BYTEA;
 
 CREATE TABLE IF NOT EXISTS posting (
     id                  SERIAL PRIMARY KEY,

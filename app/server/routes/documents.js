@@ -472,10 +472,10 @@ router.post("/:id/attachments", async (req, res) => {
         buffer: req.file.buffer,
       });
       await store.run(
-        `INSERT INTO document_attachment (document_id, file_name, mime_type, file_path, size_bytes, storage_backend, storage_url)
-         VALUES (?,?,?,?,?,?,?)`,
+        `INSERT INTO document_attachment (document_id, file_name, mime_type, file_path, size_bytes, storage_backend, storage_url, file_data)
+         VALUES (?,?,?,?,?,?,?,?)`,
         [req.params.id, req.file.originalname, req.file.mimetype, saved.file_path, saved.size_bytes,
-         saved.storage_backend, saved.storage_url]
+         saved.storage_backend, saved.storage_url, saved.file_data || null]
       );
       const id = (await store.get("SELECT last_insert_rowid() AS id")).id;
       store.persist();

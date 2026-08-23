@@ -243,6 +243,7 @@ CREATE TABLE IF NOT EXISTS document_attachment (
     size_bytes          INTEGER NOT NULL,
     storage_backend     TEXT NOT NULL DEFAULT 'fs' CHECK (storage_backend IN ('fs','blob')),
     storage_url         TEXT,
+    file_data           BLOB,
     uploaded_at         TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

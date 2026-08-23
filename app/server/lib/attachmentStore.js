@@ -68,6 +68,20 @@ async function save({ unitId, documentId, fileName, mimeType, buffer }) {
     };
   }
 
+  // Vercel filesystem je dočasný. Pokud produkce nemá nakonfigurovaný Blob,
+  // bezpečný fallback je obsah v PostgreSQL, nikoli soubor v /tmp. Backend
+  // zůstává kvůli kompatibilitě schématu označen "fs"; file_data má při
+  // načítání přednost před cestou.
+  if (process.env.VERCEL) {
+    return {
+      storage_backend: "fs",
+      file_path: "database",
+      storage_url: null,
+      file_data: buffer,
+      size_bytes: buffer.length,
+    };
+  }
+
   const dir = fsDirFor(documentId);
   const full = path.join(dir, stamped);
   fs.writeFileSync(full, buffer);
@@ -83,6 +97,7 @@ async function save({ unitId, documentId, fileName, mimeType, buffer }) {
 // odpovědi. Chybějící soubor hlásí jako chybu se `status: 404`, ať routa
 // nemusí rozlišovat backendy.
 async function load(attachment) {
+  if (attachment.file_data) return { buffer: Buffer.from(attachment.file_data) };
   const backend = attachment.storage_backend || "fs";
 
   if (backend === "blob") {
@@ -101,7 +116,7 @@ async function load(attachment) {
   }
 
   if (!attachment.file_path || !fs.existsSync(attachment.file_path)) {
-    throw Object.assign(new Error("Soubor přílohy chybí na disku."), { status: 404 });
+    throw Object.assign(new Error("Původní soubor přílohy se na dočasném serveru nezachoval. Nahrajte jej prosím k dokladu znovu."), { status: 404 });
   }
   return { stream: fs.createReadStream(attachment.file_path) };
 }
