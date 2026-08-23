@@ -63,6 +63,7 @@ async function cleanBankHistory({ unitId, userId }) {
      LEFT JOIN document d ON d.id=b.matched_document_id
      WHERE b.accounting_unit_id=? AND b.superseded_by_bank_line_id IS NULL AND b.external_ref IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM bank_clean_posting cp WHERE cp.bank_line_id=b.id)
+       AND NOT EXISTS (SELECT 1 FROM bank_clean_pending pending WHERE pending.bank_line_id=b.id)
      ORDER BY b.statement_date,b.id LIMIT 1`, [unitId]
   );
   if (!line) return { ...summary, completed: true };
@@ -82,8 +83,11 @@ async function cleanBankHistory({ unitId, userId }) {
   } else if (/meta|claude|chatgpt|vast|vercel/i.test(line.counterparty_name || "")) {
     other = await account(unitId, "518"); description = `Online služba — ${line.counterparty_name || line.external_ref}`;
   } else {
-    other = await account(unitId, Number(line.amount) > 0 ? "325" : "315");
-    description = `Bankovní pohyb čeká na doklad — ${line.counterparty_name || line.external_ref}`;
+    // Neznámý pohyb není účetní případ bez zvolené kontace. Zůstává pouze
+    // v bankovní frontě; pomocné účty 315/325 by jej po spárování zdvojily.
+    await store.run("INSERT INTO bank_clean_pending (bank_line_id) VALUES (?)", [line.id]);
+    await store.run("UPDATE bank_statement_line SET posting_id=NULL WHERE id=?", [line.id]);
+    return { ...summary, completed: false };
   }
   const pairs = Number(line.amount) > 0
     ? [{ account_id: a221, side: "MD", amount }, { account_id: other, side: "D", amount }]

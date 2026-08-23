@@ -3487,13 +3487,13 @@ document.addEventListener("click", async (e) => {
       case "rebuild-bank-history": {
         const totals = { merged_duplicates: 0, corrected_loans: 0, posted_loans: 0, posted_payments: 0, capital_posted: false };
         let completed = false;
-        for (let step = 0; step < 150 && !completed; step++) {
+        for (let step = 0; step < 300 && !completed; step++) {
           const result = await api("POST", "/bank/rebuild-history", {});
           for (const key of ["merged_duplicates", "corrected_loans", "posted_loans", "posted_payments"]) totals[key] += Number(result[key] || 0);
           totals.capital_posted = totals.capital_posted || !!result.capital_posted;
           completed = !!result.completed;
         }
-        if (!completed) throw new Error("Migrace nebyla dokončena v bezpečném limitu 150 kroků.");
+        if (!completed) throw new Error("Migrace nebyla dokončena v bezpečném limitu 300 kroků.");
         toast(`Historie převedena: ${totals.merged_duplicates} duplicit sloučeno, ${totals.corrected_loans + totals.posted_loans} zápůjček opraveno, ${totals.posted_payments} úhrad doplněno.`);
         await renderBank();
         break;

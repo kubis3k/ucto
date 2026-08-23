@@ -341,6 +341,10 @@ CREATE TABLE IF NOT EXISTS bank_clean_posting (
     bank_line_id INTEGER PRIMARY KEY REFERENCES bank_statement_line(id),
     posting_id INTEGER NOT NULL REFERENCES posting(id)
 );
+CREATE TABLE IF NOT EXISTS bank_clean_pending (
+    bank_line_id INTEGER PRIMARY KEY REFERENCES bank_statement_line(id),
+    marked_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
 -- ---------------------------------------------------------------------
 -- Párovací e-mailová adresa banky (Fakturoid-styl) — token = MailboxHash
