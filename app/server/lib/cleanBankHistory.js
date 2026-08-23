@@ -32,6 +32,41 @@ async function createPosting(unitId, userId, line, description, pairs, documentI
 async function cleanBankHistory({ unitId, userId }) {
   const summary = { superseded: 0, generated: 0 };
 
+  // Splátkový kalendář není jednorázový závazek v celé hodnotě budoucího
+  // harmonogramu. Starší verze při jeho vložení zaúčtovala celý součet na
+  // D 321, ačkoli jednotlivé závazky vznikají postupně. Ponecháme proto
+  // pouze dosud skutečně uhrazené splátky; proti jejich settlementům se 321
+  // vynuluje. Budoucí splátky se zaúčtují až v příslušném období.
+  const overbookedSchedule = await store.get(
+    `SELECT d.id AS document_id,d.doc_number,d.issue_date,d.total_amount,
+            p.id AS posting_id,expense.account_id,
+            COALESCE((SELECT SUM(ABS(b.amount)) FROM bank_statement_line b
+                      WHERE b.matched_document_id=d.id AND b.superseded_by_bank_line_id IS NULL),0) AS paid
+     FROM document d
+     JOIN posting p ON p.document_id=d.id
+     JOIN posting_line liability ON liability.posting_id=p.id AND liability.side='D'
+     JOIN chart_of_accounts lca ON lca.id=liability.account_id AND lca.account_number LIKE '321%'
+     JOIN posting_line expense ON expense.posting_id=p.id AND expense.side='MD'
+     WHERE d.accounting_unit_id=? AND d.doc_type='faktura_prijata'
+       AND LOWER(COALESCE(d.description,'')) LIKE 'splátkový kalendář%'
+       AND ABS(liability.amount-d.total_amount)<0.01
+       AND NOT EXISTS (SELECT 1 FROM posting_supersession ps WHERE ps.posting_id=p.id)
+     ORDER BY d.id LIMIT 1`, [unitId]
+  );
+  if (overbookedSchedule && Number(overbookedSchedule.paid) < Number(overbookedSchedule.total_amount)-0.01) {
+    await store.run("INSERT INTO posting_supersession (posting_id,reason) VALUES (?,?)",
+      [overbookedSchedule.posting_id, "Celý budoucí splátkový kalendář byl chybně vykázán jako současný závazek"]);
+    const paid = Math.round(Number(overbookedSchedule.paid) * 100) / 100;
+    if (paid > 0) {
+      const a321 = await account(unitId, "321");
+      await createPosting(unitId, userId, { statement_date: overbookedSchedule.issue_date },
+        `Dosud vzniklé splátky ${overbookedSchedule.doc_number}`,
+        [{ account_id: overbookedSchedule.account_id, side: "MD", amount: paid },
+         { account_id: a321, side: "D", amount: paid }], overbookedSchedule.document_id);
+    }
+    return { ...summary, superseded: 1, generated: paid > 0 ? 1 : 0, completed: false };
+  }
+
   // Jeden bankovní řádek nesmí současně nést přímý náklad a úhradu již
   // zaúčtované přijaté faktury. To vzniklo např. u e-SIM 99 Kč: faktura
   // vytvořila MD 518 / D 321, úhrada MD 321 / D 221 a starší klasifikátor
