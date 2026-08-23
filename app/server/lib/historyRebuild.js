@@ -16,12 +16,12 @@ async function createPosting({ unitId, userId, date, description, documentId = n
     if (!period) throw new Error(`Pro datum ${date} neexistuje účetní období.`);
     await assertMonthOpen(unitId, date);
     const number = await nextPostingNumber(unitId);
-    await store.run(
+    const inserted = await store.get(
     `INSERT INTO posting (accounting_unit_id,period_id,posting_number,document_id,posting_date,description,created_by)
-     VALUES (?,?,?,?,?,?,?)`,
+     VALUES (?,?,?,?,?,?,?) RETURNING id`,
     [unitId, period.id, number, documentId, date, description, userId]
     );
-    const id = (await store.get("SELECT last_insert_rowid() AS id")).id;
+    const id = inserted.id;
     for (const line of lines) await store.run(
     "INSERT INTO posting_line (posting_id,account_id,side,amount) VALUES (?,?,?,?)",
     [id, line.account_id, line.side, line.amount]
