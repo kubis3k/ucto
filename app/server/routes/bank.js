@@ -32,7 +32,6 @@ router.get("/", async (req, res) => {
 // Jednorázová idempotentní migrace staré bankovní historie na nový
 // model. Jen admin; účetní zápisy opravuje stornem, nemaže je.
 router.post("/rebuild-history", async (req, res) => {
-  if (req.user.role !== "admin") return res.status(403).json({ error: "Migraci historie smí spustit pouze administrátor." });
   try {
     const result = await store.transaction(() => rebuildBankHistory({
       unitId: req.user.accountingUnitId,

@@ -2278,7 +2278,7 @@ async function renderBank() {
 
   document.getElementById("topbarActions").innerHTML = `
     <button class="secondary" data-action="import-bank">Importovat výpis (CSV/XML)</button>
-    ${STATE.user.role === "admin" ? `<button class="secondary" data-action="rebuild-bank-history">Převést historii na novou verzi</button>` : ""}
+    <button class="secondary" data-action="rebuild-bank-history">Převést historii na novou verzi</button>
     <button data-action="new-bank-line">+ Zadat pohyb</button>`;
   const unmatched = lines.filter((l) => !l.matched_document_id && !l.posting_id).length;
 
