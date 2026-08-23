@@ -42,10 +42,9 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
   const duplicate = await store.get(
     `SELECT n.id FROM bank_statement_line n WHERE n.accounting_unit_id=? AND n.external_ref IS NOT NULL
        AND n.matched_document_id IS NULL AND n.posting_id IS NULL AND EXISTS (
-         SELECT 1 FROM bank_statement_line o WHERE o.accounting_unit_id=n.accounting_unit_id
+          SELECT 1 FROM bank_statement_line o WHERE o.accounting_unit_id=n.accounting_unit_id
           AND o.id<n.id AND o.bank_account=n.bank_account
           AND o.statement_date=n.statement_date AND o.amount=n.amount
-          AND COALESCE(o.counterparty_account,'')=COALESCE(n.counterparty_account,'')
           AND COALESCE(o.variable_symbol,'')=COALESCE(n.variable_symbol,''))
      ORDER BY n.id LIMIT 1`, [unitId]
   );
