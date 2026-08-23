@@ -535,12 +535,13 @@ router.get("/cashflow", async (req, res) => {
     const unit = req.query.unit;
     const lines = await store.all("SELECT bank_account, amount, statement_date FROM bank_statement_line WHERE accounting_unit_id = ? AND superseded_by_bank_line_id IS NULL", [unit]);
     const balances = {};
-    for (const l of lines) balances[l.bank_account] = (balances[l.bank_account] || 0) + Number(l.amount);
+    const roundMoney = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+    for (const l of lines) balances[l.bank_account] = roundMoney((balances[l.bank_account] || 0) + Number(l.amount));
 
     const cutoff = (days) => new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
     const sumSince = (days, positive) => lines
       .filter((l) => l.statement_date >= cutoff(days) && (positive ? l.amount > 0 : l.amount < 0))
-      .reduce((s, l) => s + Math.abs(Number(l.amount)), 0);
+      .reduce((s, l) => roundMoney(s + Math.abs(Number(l.amount))), 0);
 
     // Měsíční přehled za posledních 12 měsíců pro graf na dashboardu — počítáno
     // v JS ze stejných řádků (žádná dialektově specifická SQL date funkce).
@@ -553,9 +554,9 @@ router.get("/cashflow", async (req, res) => {
     }
     const monthly = months.map((month) => {
       const inMonth = lines.filter((l) => monthKey(l.statement_date) === month);
-      const income = inMonth.filter((l) => l.amount > 0).reduce((s, l) => s + Number(l.amount), 0);
-      const expense = inMonth.filter((l) => l.amount < 0).reduce((s, l) => s + Math.abs(Number(l.amount)), 0);
-      return { month, income, expense, net: income - expense };
+      const income = inMonth.filter((l) => l.amount > 0).reduce((s, l) => roundMoney(s + Number(l.amount)), 0);
+      const expense = inMonth.filter((l) => l.amount < 0).reduce((s, l) => roundMoney(s + Math.abs(Number(l.amount))), 0);
+      return { month, income, expense, net: roundMoney(income - expense) };
     });
 
     res.json({

@@ -9,6 +9,11 @@ const {
   resolveRow,
 } = require("./statementMapping");
 
+// Peněžní hodnoty ukládáme a předáváme po haléřích. Databázový REAL /
+// JavaScript Number jinak může při průběžném součtu vrátit např.
+// 12723.600000000006.
+const roundMoney = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+
 async function accountNaturalBalance(accountId, asOfDate) {
   const acc = await store.get(`SELECT account_type FROM chart_of_accounts WHERE id = ?`, [accountId]);
   const sums = await store.get(
@@ -21,9 +26,9 @@ async function accountNaturalBalance(accountId, asOfDate) {
     [accountId, asOfDate]
   );
   if (acc.account_type === "rozvahovy_aktivni" || acc.account_type === "vysledkovy_naklad") {
-    return sums.md - sums.d;
+    return roundMoney(sums.md - sums.d);
   }
-  return sums.d - sums.md;
+  return roundMoney(sums.d - sums.md);
 }
 
 // HLAVNÍ KNIHA — pohyby a průběžný zůstatek po účtech
@@ -43,7 +48,7 @@ async function hlavniKniha(unitId, asOfDate) {
   return rows.map((r) => {
     const natural = r.account_type === "rozvahovy_aktivni" || r.account_type === "vysledkovy_naklad";
     const delta = natural ? (r.side === "MD" ? r.amount : -r.amount) : (r.side === "D" ? r.amount : -r.amount);
-    running[r.account_id] = (running[r.account_id] || 0) + delta;
+    running[r.account_id] = roundMoney((running[r.account_id] || 0) + delta);
     return {
       account_number: r.account_number,
       account_name: r.account_name,
@@ -52,7 +57,7 @@ async function hlavniKniha(unitId, asOfDate) {
       description: r.description,
       md_amount: r.side === "MD" ? r.amount : null,
       d_amount: r.side === "D" ? r.amount : null,
-      running_balance: running[r.account_id],
+      running_balance: roundMoney(running[r.account_id]),
     };
   });
 }

@@ -32,6 +32,28 @@ async function createPosting(unitId, userId, line, description, pairs, documentI
 async function cleanBankHistory({ unitId, userId }) {
   const summary = { superseded: 0, generated: 0 };
 
+  // Samotný odchod na vlastní účet nedokládá, zda peníze dorazily do
+  // pokladny, na jiný bankovní účet, nebo šlo o jiný účel. Starší migrace
+  // jej automaticky dala na 261. Bez protistrany jej vrátíme uživateli k
+  // volbě a účet 261 nenecháme uměle otevřený.
+  const unresolvedTransfer = await store.get(
+    `SELECT cp.bank_line_id,cp.posting_id FROM bank_clean_posting cp
+     JOIN posting p ON p.id=cp.posting_id
+     JOIN bank_statement_line b ON b.id=cp.bank_line_id
+     WHERE p.accounting_unit_id=? AND p.description='Vnitřní převod peněžních prostředků'
+       AND NOT EXISTS (SELECT 1 FROM posting_supersession ps WHERE ps.posting_id=p.id)
+     ORDER BY p.id LIMIT 1`, [unitId]
+  );
+  if (unresolvedTransfer) {
+    await store.run("INSERT INTO posting_supersession (posting_id,reason) VALUES (?,?)",
+      [unresolvedTransfer.posting_id, "Cíl vnitřního převodu nebyl doložen"]);
+    await store.run("DELETE FROM bank_clean_posting WHERE bank_line_id=?", [unresolvedTransfer.bank_line_id]);
+    const pending = await store.get("SELECT bank_line_id FROM bank_clean_pending WHERE bank_line_id=?", [unresolvedTransfer.bank_line_id]);
+    if (!pending) await store.run("INSERT INTO bank_clean_pending (bank_line_id) VALUES (?)", [unresolvedTransfer.bank_line_id]);
+    await store.run("UPDATE bank_statement_line SET posting_id=NULL WHERE id=?", [unresolvedTransfer.bank_line_id]);
+    return { ...summary, superseded: 1, completed: false };
+  }
+
   // Staré bankovní větve zůstanou v deníku/auditu, ale nesmějí vstupovat
   // do hlavní knihy ani výkazů. Každý krok označí nejvýše jeden posting.
   const obsolete = await store.get(
@@ -75,8 +97,7 @@ async function cleanBankHistory({ unitId, userId }) {
        LOWER(COALESCE(b.counterparty_name,'')) LIKE '%claude%' OR
        LOWER(COALESCE(b.counterparty_name,'')) LIKE '%chatgpt%' OR
        LOWER(COALESCE(b.counterparty_name,'')) LIKE '%vast%' OR
-       LOWER(COALESCE(b.counterparty_name,'')) LIKE '%vercel%' OR
-       LOWER(COALESCE(b.counterparty_name,'')) LIKE '%globaal elevate prod%'
+       LOWER(COALESCE(b.counterparty_name,'')) LIKE '%vercel%'
      ) ORDER BY b.id LIMIT 1`, [unitId]
   );
   if (reconsider) {
@@ -104,8 +125,6 @@ async function cleanBankHistory({ unitId, userId }) {
     other = await account(unitId, "311"); description = `Úhrada ${line.doc_number}`;
   } else if (line.doc_type === "faktura_prijata" && Number(line.amount) < 0) {
     other = await account(unitId, "321"); description = `Úhrada ${line.doc_number}`;
-  } else if (/globaal elevate prod/i.test(line.counterparty_name || "")) {
-    other = await account(unitId, "261"); description = "Vnitřní převod peněžních prostředků";
   } else if (/meta|claude|chatgpt|vast|vercel/i.test(line.counterparty_name || "")) {
     other = await account(unitId, "518"); description = `Online služba — ${line.counterparty_name || line.external_ref}`;
   } else {
