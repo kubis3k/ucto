@@ -73,6 +73,42 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
 
   const a221 = await account(unitId, "221"), a354 = await account(unitId, "354"), a365 = await account(unitId, "365");
 
+  // Odstranit účetní účinek duplicitních automatických zápůjček, pokud
+  // stejný bankovní příjem už reprezentuje starší správný nebo opravený zápis.
+  const duplicateLoans = await store.all(
+    `SELECT p.*,b.id AS bank_line_id,b.amount AS bank_amount FROM bank_statement_line b
+     JOIN posting p ON p.id=b.posting_id
+     WHERE b.accounting_unit_id=? AND b.superseded_by_bank_line_id IS NULL
+       AND p.description LIKE 'Zápůjčka od společníka — %'
+       AND NOT EXISTS (SELECT 1 FROM posting x WHERE x.accounting_unit_id=p.accounting_unit_id
+         AND x.description=('OPRAVA DUPLICITNÍ zápůjčky k zápisu č. ' || p.posting_number))
+     ORDER BY p.id`, [unitId]
+  );
+  for (const duplicateLoan of duplicateLoans) {
+    let replacement = await store.get(
+      `SELECT p.id FROM posting p JOIN posting_line pl ON pl.posting_id=p.id
+       JOIN chart_of_accounts ca ON ca.id=pl.account_id AND ca.account_number LIKE '221%'
+       WHERE p.accounting_unit_id=? AND p.id<>? AND p.posting_date=? AND pl.side='MD'
+         AND ABS(pl.amount-?)<0.005 AND p.description NOT LIKE 'Zápůjčka od společníka — %'
+       ORDER BY p.id LIMIT 1`, [unitId, duplicateLoan.id, duplicateLoan.posting_date, duplicateLoan.bank_amount]
+    );
+    if (!replacement) replacement = await store.get(
+      `SELECT p.id FROM posting p JOIN posting_line pl ON pl.posting_id=p.id
+       JOIN chart_of_accounts ca ON ca.id=pl.account_id AND ca.account_number LIKE '221%'
+       WHERE p.accounting_unit_id=? AND p.description LIKE 'OPRAVA SPRÁVNÉ zápůjčky k zápisu č. %'
+         AND pl.side='MD' AND ABS(pl.amount-?)<0.005 ORDER BY p.id LIMIT 1`, [unitId, duplicateLoan.bank_amount]
+    );
+    if (replacement) {
+      const oldLines = await store.all("SELECT account_id,side,amount FROM posting_line WHERE posting_id=?", [duplicateLoan.id]);
+      await createPosting({ unitId, userId, date: new Date().toISOString().slice(0, 10),
+        description: `OPRAVA DUPLICITNÍ zápůjčky k zápisu č. ${duplicateLoan.posting_number}`,
+        lines: oldLines.map((l) => ({ ...l, side: l.side === "MD" ? "D" : "MD" })) });
+      await store.run("UPDATE bank_statement_line SET posting_id=? WHERE id=?", [replacement.id, duplicateLoan.bank_line_id]);
+      summary.corrected_loans++;
+      return { ...summary, completed: false };
+    }
+  }
+
   // Obecná oprava starých bankovních zápisů: aktivní účet 221 roste na MD
   // a klesá na D. Opravujeme pouze prokazatelný rozpor se znaménkem výpisu.
   const inverted = await store.get(
@@ -161,6 +197,27 @@ async function rebuildBankHistory({ unitId, userId, capitalAmount, capitalDate }
       : [{ account_id: a321, side: "MD", amount: amt }, { account_id: a221, side: "D", amount: amt }];
     const id = await createPosting({ unitId, userId, date: line.statement_date, documentId: line.document_id,
       description: `Úhrada ${line.doc_number}`, lines });
+    summary.posted_payments++;
+    return { ...summary, completed: false };
+  }
+
+  // Každý pohyb musí být v hlavní knize 221 právě jednou. Nezařazené
+  // transakce dočasně vedeme proti 315/325; po dodání dokladu se
+  // reklasifikuje pouze protistrana a banka zůstane nedotčená.
+  const pending = await store.get(
+    `SELECT * FROM bank_statement_line WHERE accounting_unit_id=?
+       AND superseded_by_bank_line_id IS NULL AND posting_id IS NULL AND matched_document_id IS NULL
+     ORDER BY statement_date,id LIMIT 1`, [unitId]
+  );
+  if (pending) {
+    const a315 = await account(unitId, "315"), a325 = await account(unitId, "325");
+    const amount = Math.abs(Number(pending.amount));
+    const lines = Number(pending.amount) > 0
+      ? [{ account_id: a221, side: "MD", amount }, { account_id: a325, side: "D", amount }]
+      : [{ account_id: a315, side: "MD", amount }, { account_id: a221, side: "D", amount }];
+    const id = await createPosting({ unitId, userId, date: pending.statement_date,
+      description: `Bankovní pohyb čeká na doklad — ${pending.counterparty_name || pending.external_ref || pending.id}`, lines });
+    await store.run("UPDATE bank_statement_line SET posting_id=? WHERE id=?", [id, pending.id]);
     summary.posted_payments++;
     return { ...summary, completed: false };
   }
