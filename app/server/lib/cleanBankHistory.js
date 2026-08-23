@@ -47,6 +47,11 @@ async function cleanBankHistory({ unitId, userId }) {
          p.description LIKE 'OPRAVA %' OR
          p.description LIKE 'Vyrovnání 221 %' OR
          p.description LIKE 'Vyrovnání 365 %' OR
+         (LOWER(p.description) LIKE '%počáteční%bank%'
+           AND EXISTS (SELECT 1 FROM posting_line opening_pl
+             JOIN chart_of_accounts opening_ca ON opening_ca.id=opening_pl.account_id
+             WHERE opening_pl.posting_id=p.id AND opening_ca.account_number LIKE '221%'
+               AND ABS(opening_pl.amount-10000) < 0.01)) OR
          EXISTS (SELECT 1 FROM posting_line pl JOIN chart_of_accounts ca ON ca.id=pl.account_id
                  WHERE pl.posting_id=p.id AND ca.account_number LIKE '354%')
        )

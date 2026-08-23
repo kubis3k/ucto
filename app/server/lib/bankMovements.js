@@ -66,12 +66,13 @@ async function autoMatchLine(lineId, unitId) {
   const candidates = await store.all(
     `SELECT * FROM document
      WHERE accounting_unit_id = ? AND status <> 'stornovany'
-       AND ((? IS NOT NULL AND ? <> '' AND variable_symbol = ?)
+       AND ((COALESCE(CAST(? AS TEXT),'') <> '' AND variable_symbol = CAST(? AS TEXT))
          OR ABS(total_amount - ABS(?)) < 0.01)
        AND ((doc_type='faktura_vydana' AND ? > 0)
          OR (doc_type='faktura_prijata' AND ? < 0))
-     ORDER BY CASE WHEN variable_symbol = ? AND ? <> '' THEN 0 ELSE 1 END, id`,
-    [unitId, line.variable_symbol, line.variable_symbol, line.variable_symbol, line.amount,
+     ORDER BY CASE WHEN variable_symbol = CAST(? AS TEXT)
+       AND COALESCE(CAST(? AS TEXT),'') <> '' THEN 0 ELSE 1 END, id`,
+    [unitId, line.variable_symbol, line.variable_symbol, line.amount,
       line.amount, line.amount, line.variable_symbol, line.variable_symbol]
   );
   const exactVs = candidates.filter((d) => line.variable_symbol && d.variable_symbol === line.variable_symbol);
