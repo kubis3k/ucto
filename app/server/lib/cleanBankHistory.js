@@ -32,6 +32,31 @@ async function createPosting(unitId, userId, line, description, pairs, documentI
 async function cleanBankHistory({ unitId, userId }) {
   const summary = { superseded: 0, generated: 0 };
 
+  // Jeden bankovní řádek nesmí současně nést přímý náklad a úhradu již
+  // zaúčtované přijaté faktury. To vzniklo např. u e-SIM 99 Kč: faktura
+  // vytvořila MD 518 / D 321, úhrada MD 321 / D 221 a starší klasifikátor
+  // navíc ponechal MD 518xxx / D 221. Vyřadíme pouze tento třetí zápis.
+  const duplicateDirectExpense = await store.get(
+    `SELECT cp.bank_line_id,cp.posting_id
+     FROM bank_clean_posting cp
+     JOIN bank_statement_line b ON b.id=cp.bank_line_id
+     JOIN document d ON d.id=b.matched_document_id AND d.doc_type='faktura_prijata'
+     JOIN posting settlement ON settlement.id=b.posting_id AND settlement.document_id=d.id
+     JOIN posting direct ON direct.id=cp.posting_id
+     WHERE b.accounting_unit_id=?
+       AND settlement.id<>direct.id
+       AND NOT EXISTS (SELECT 1 FROM posting_supersession ps WHERE ps.posting_id=direct.id)
+       AND EXISTS (SELECT 1 FROM posting_line pl JOIN chart_of_accounts ca ON ca.id=pl.account_id
+                   WHERE pl.posting_id=direct.id AND ca.account_number LIKE '518%')
+     ORDER BY b.id LIMIT 1`, [unitId]
+  );
+  if (duplicateDirectExpense) {
+    await store.run("INSERT INTO posting_supersession (posting_id,reason) VALUES (?,?)",
+      [duplicateDirectExpense.posting_id, "Duplicitní přímý náklad nahrazen úhradou zaúčtované přijaté faktury"]);
+    await store.run("DELETE FROM bank_clean_posting WHERE bank_line_id=?", [duplicateDirectExpense.bank_line_id]);
+    return { ...summary, superseded: 1, completed: false };
+  }
+
   // Pokud už existuje zaúčtovaná přijatá faktura (MD náklad / D 321),
   // bankovní výdej nesmí vytvořit druhý náklad. U jednoznačné shody částky
   // nahradíme přímý bankovní náklad úhradou MD 321 / D 221.
