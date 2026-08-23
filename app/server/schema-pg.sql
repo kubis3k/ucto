@@ -583,6 +583,26 @@ DROP TRIGGER IF EXISTS trg_posting_no_delete ON posting;
 CREATE TRIGGER trg_posting_no_delete BEFORE DELETE ON posting
     FOR EACH ROW EXECUTE FUNCTION trg_fn_posting_no_delete();
 
+-- Starší produkční verze vytvářela INSERT trigger, který uzamkl posting
+-- už po první řádce a znemožnil vložit vyvažující stranu zápisu. Trigger
+-- není součástí současného schématu, takže jej odstraňujeme cíleně podle
+-- textu jeho funkce; append-only UPDATE/DELETE ochrany níže zůstávají.
+DO $$
+DECLARE legacy_trigger RECORD;
+BEGIN
+  FOR legacy_trigger IN
+    SELECT t.tgname
+      FROM pg_trigger t
+      JOIN pg_proc p ON p.oid=t.tgfoid
+     WHERE t.tgrelid='posting_line'::regclass
+       AND NOT t.tgisinternal
+       AND (p.prosrc ILIKE '%Dokončený účetní zápis%'
+            OR p.prosrc ILIKE '%další řádek nelze přidat%')
+  LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS %I ON posting_line', legacy_trigger.tgname);
+  END LOOP;
+END $$;
+
 CREATE OR REPLACE FUNCTION trg_fn_posting_line_no_update() RETURNS TRIGGER AS $$
 BEGIN
     RAISE EXCEPTION 'Řádky účetních zápisů jsou append-only (§ 33a zákona o účetnictví).';
