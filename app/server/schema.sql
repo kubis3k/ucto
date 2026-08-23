@@ -332,6 +332,15 @@ CREATE TABLE IF NOT EXISTS bank_statement_line (
     superseded_by_bank_line_id INTEGER REFERENCES bank_statement_line(id),
     imported_at         TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS posting_supersession (
+    posting_id INTEGER PRIMARY KEY REFERENCES posting(id),
+    reason TEXT NOT NULL,
+    superseded_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS bank_clean_posting (
+    bank_line_id INTEGER PRIMARY KEY REFERENCES bank_statement_line(id),
+    posting_id INTEGER NOT NULL REFERENCES posting(id)
+);
 
 -- ---------------------------------------------------------------------
 -- Párovací e-mailová adresa banky (Fakturoid-styl) — token = MailboxHash

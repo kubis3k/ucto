@@ -5,7 +5,7 @@ const { nextPostingNumber, writeAuditLog, assertPeriodOpen, assertMonthOpen } = 
 const { createBankStatementLine } = require("../lib/bankMovements");
 const { resolvePeriodForDate } = require("../lib/recurring");
 const { getRate } = require("../lib/cnbExchangeRate");
-const { rebuildBankHistory } = require("../lib/historyRebuild");
+const { cleanBankHistory } = require("../lib/cleanBankHistory");
 const router = express.Router();
 
 // Vestavěný slovník klíčových slov — výchozí návrh kategorie, dokud si
@@ -33,11 +33,9 @@ router.get("/", async (req, res) => {
 // model. Jen admin; účetní zápisy opravuje stornem, nemaže je.
 router.post("/rebuild-history", async (req, res) => {
   try {
-    const result = await store.transaction(() => rebuildBankHistory({
+    const result = await store.transaction(() => cleanBankHistory({
       unitId: req.user.accountingUnitId,
       userId: req.user.id,
-      capitalAmount: 30,
-      capitalDate: "2026-04-20",
     }));
     store.persist();
     res.json(result);

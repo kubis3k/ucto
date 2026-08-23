@@ -7,7 +7,9 @@ const router = express.Router();
 router.get("/", async (req, res) => {
   try {
     const rows = await store.all(
-      "SELECT * FROM posting WHERE accounting_unit_id = ? ORDER BY posting_date DESC, posting_number DESC",
+      `SELECT * FROM posting p WHERE accounting_unit_id = ?
+       AND NOT EXISTS (SELECT 1 FROM posting_supersession ps WHERE ps.posting_id=p.id)
+       ORDER BY posting_date DESC, posting_number DESC`,
       [req.query.unit]
     );
     res.json(rows);

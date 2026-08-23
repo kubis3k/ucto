@@ -313,6 +313,15 @@ ALTER TABLE bank_statement_line ADD COLUMN IF NOT EXISTS external_ref TEXT;
 ALTER TABLE bank_statement_line ADD COLUMN IF NOT EXISTS superseded_by_bank_line_id INTEGER REFERENCES bank_statement_line(id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_bank_statement_line_external_ref
     ON bank_statement_line(accounting_unit_id, external_ref) WHERE external_ref IS NOT NULL;
+CREATE TABLE IF NOT EXISTS posting_supersession (
+    posting_id INTEGER PRIMARY KEY REFERENCES posting(id),
+    reason TEXT NOT NULL,
+    superseded_at TEXT NOT NULL DEFAULT (now()::text)
+);
+CREATE TABLE IF NOT EXISTS bank_clean_posting (
+    bank_line_id INTEGER PRIMARY KEY REFERENCES bank_statement_line(id),
+    posting_id INTEGER NOT NULL REFERENCES posting(id)
+);
 
 -- ---------------------------------------------------------------------
 -- Párovací e-mailová adresa banky (Fakturoid-styl) — viz schema.sql pro

@@ -84,7 +84,9 @@ router.get("/ucetni-denik", async (req, res) => {
   const rows = await store.all(
     `SELECT p.posting_number, p.posting_date, p.description, coa.account_number, coa.name AS account_name, pl.side, pl.amount
      FROM posting p JOIN posting_line pl ON pl.posting_id = p.id JOIN chart_of_accounts coa ON coa.id = pl.account_id
-     WHERE p.accounting_unit_id = ? ORDER BY p.posting_number, pl.id`,
+     WHERE p.accounting_unit_id = ?
+       AND NOT EXISTS (SELECT 1 FROM posting_supersession ps WHERE ps.posting_id=p.id)
+     ORDER BY p.posting_number, pl.id`,
     [req.query.unit]
   );
   await sendFormat(req, res, "ucetni-denik", "Účetní deník", rows);
